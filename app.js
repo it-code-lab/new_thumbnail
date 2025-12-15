@@ -24,7 +24,7 @@ const state = {
 
   // Crop rectangle in SOURCE IMAGE pixel coordinates (sx,sy,sw,sh)
   bgCrop: null, // { sx, sy, sw, sh }
-  showCropOverlay: true, // NEW: toggle crop UI visibility
+  showCropOverlay: false, // NEW: toggle crop UI visibility
 
   layers: [],
   selectedLayerId: null,
@@ -32,33 +32,54 @@ const state = {
   dragging: null, // for layer move/resize
   bgDragging: null, // for background crop move/resize
   dpiScale: 1,
+  bgType: "none",     // "none" | "image" | "video"
+  bgVideoEl: null,
+  bgVideoSrc: "",
+  bgVideoReady: false,
 
 };
+
+let videoRAF = null;
+
+function startVideoRenderLoop(){
+  if (videoRAF) cancelAnimationFrame(videoRAF);
+
+  const loop = () => {
+    // Only animate when video background is active
+    if (state.bgType === "video" && state.bgVideoReady) {
+      render(); // edit mode
+      videoRAF = requestAnimationFrame(loop);
+    } else {
+      videoRAF = null;
+    }
+  };
+  loop();
+}
 
 function uid() { return Math.random().toString(16).slice(2) + Date.now().toString(16); }
 function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
-function rgbaFromHex(hex, alpha=1){
-  const h = hex.replace("#","").trim();
-  const full = h.length === 3 ? h.split("").map(c=>c+c).join("") : h;
-  const r = parseInt(full.slice(0,2),16);
-  const g = parseInt(full.slice(2,4),16);
-  const b = parseInt(full.slice(4,6),16);
+function rgbaFromHex(hex, alpha = 1) {
+  const h = hex.replace("#", "").trim();
+  const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-function setStatus(msg){ $("statusPill").textContent = msg; }
+function setStatus(msg) { $("statusPill").textContent = msg; }
 
-function pxBoxFromPct(boxPct){
+function pxBoxFromPct(boxPct) {
   const { w, h } = formats[state.formatKey];
-  return { x: boxPct.x*w, y: boxPct.y*h, w: boxPct.w*w, h: boxPct.h*h };
+  return { x: boxPct.x * w, y: boxPct.y * h, w: boxPct.w * w, h: boxPct.h * h };
 }
-function pctBoxFromPx(boxPx){
+function pctBoxFromPx(boxPx) {
   const { w, h } = formats[state.formatKey];
-  return { x: boxPx.x/w, y: boxPx.y/h, w: boxPx.w/w, h: boxPx.h/h };
+  return { x: boxPx.x / w, y: boxPx.y / h, w: boxPx.w / w, h: boxPx.h / h };
 }
 
-async function loadImageFromBlob(blob){
+async function loadImageFromBlob(blob) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -67,25 +88,26 @@ async function loadImageFromBlob(blob){
   });
 }
 
-function getCanvasWH(){
+function getCanvasWH() {
   const f = formats[state.formatKey];
   return { W: f.w, H: f.h };
 }
 
-function getBgWH(){
+
+function getBgWH() {
   if (!state.bgImage) return { iw: 0, ih: 0 };
   const iw = state.bgImage.naturalWidth || state.bgImage.width;
   const ih = state.bgImage.naturalHeight || state.bgImage.height;
   return { iw, ih };
 }
 
-function getCanvasAspect(){
+function getCanvasAspect() {
   const { W, H } = getCanvasWH();
   return W / H;
 }
 
 // -------------------- Layers --------------------
-function makeTextLayer({ name="Text", text="YOUR HOOK", box=null } = {}){
+function makeTextLayer({ name = "Text", text = "YOUR HOOK", box = null } = {}) {
   return {
     id: uid(),
     type: "text",
@@ -122,7 +144,7 @@ function makeTextLayer({ name="Text", text="YOUR HOOK", box=null } = {}){
   };
 }
 
-function makeImageLayer({ name="Logo", box=null } = {}){
+function makeImageLayer({ name = "Logo", box = null } = {}) {
   return {
     id: uid(),
     type: "image",
@@ -138,21 +160,21 @@ function makeImageLayer({ name="Logo", box=null } = {}){
 }
 
 // -------------------- Canvas sizing --------------------
-function applyCanvasFormat(){
+function applyCanvasFormat() {
   const f = formats[state.formatKey];
-  canvas.width  = f.w * state.dpiScale;
+  canvas.width = f.w * state.dpiScale;
   canvas.height = f.h * state.dpiScale;
 
   // Let CSS handle scaling (prevents "squeezing" on screen)
   canvas.style.width = "100%";
   canvas.style.height = "auto";
 
-  ctx.setTransform(state.dpiScale,0,0,state.dpiScale,0,0);
+  ctx.setTransform(state.dpiScale, 0, 0, state.dpiScale, 0, 0);
 }
 
 // -------------------- Background crop init --------------------
 // Create a centered crop box that matches canvas aspect ratio.
-function initCenteredBgCrop(){
+function initCenteredBgCrop() {
   if (!state.bgImage) { state.bgCrop = null; return; }
   const { iw, ih } = getBgWH();
   const ar = getCanvasAspect();
@@ -160,7 +182,7 @@ function initCenteredBgCrop(){
   // Start with the largest crop that fits inside the image with the same aspect ratio.
   let sw = iw;
   let sh = sw / ar;
-  if (sh > ih){
+  if (sh > ih) {
     sh = ih;
     sw = sh * ar;
   }
@@ -172,76 +194,111 @@ function initCenteredBgCrop(){
 }
 
 // Reset crop to centered fit
-function resetBgCrop(){
+function resetBgCrop() {
   initCenteredBgCrop();
   render();
   setStatus("Background crop reset");
 }
 
 // -------------------- Background rendering --------------------
-function drawBackground(){
+function drawBackground() {
   const { W, H } = getCanvasWH();
-  ctx.clearRect(0,0,W,H);
+  ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = "#0a1020";
-  ctx.fillRect(0,0,W,H);
+  ctx.fillRect(0, 0, W, H);
 
-  if (!state.bgImage) return;
+  // if (!state.bgImage) return;
 
-  const img = state.bgImage;
-  const { iw, ih } = getBgWH();
+  if (state.bgType === "image" && state.bgImage) {
+    ctx.fillStyle = "#0a1020";
+    const img = state.bgImage;
+    const { iw, ih } = getBgWH();
 
-  if (state.bgMode === "crop" && state.bgCrop){
-    const { sx, sy, sw, sh } = state.bgCrop;
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
-  } else if (state.bgMode === "cover"){
-    const scale = Math.max(W/iw, H/ih);
-    const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
-  } else if (state.bgMode === "contain"){
-    const scale = Math.min(W/iw, H/ih);
-    const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
-  } else { // contain_blur
-    ctx.save();
-    ctx.filter = "blur(22px) saturate(1.05)";
-    const scaleC = Math.max(W/iw, H/ih);
-    const dwC = iw * scaleC, dhC = ih * scaleC;
-    ctx.drawImage(img, (W-dwC)/2, (H-dhC)/2, dwC, dhC);
-    ctx.restore();
+    if (state.bgMode === "crop" && state.bgCrop) {
+      const { sx, sy, sw, sh } = state.bgCrop;
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+    } else if (state.bgMode === "cover") {
+      const scale = Math.max(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    } else if (state.bgMode === "contain") {
+      const scale = Math.min(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    } else { // contain_blur
+      ctx.save();
+      ctx.filter = "blur(22px) saturate(1.05)";
+      const scaleC = Math.max(W / iw, H / ih);
+      const dwC = iw * scaleC, dhC = ih * scaleC;
+      ctx.drawImage(img, (W - dwC) / 2, (H - dhC) / 2, dwC, dhC);
+      ctx.restore();
 
-    const scale = Math.min(W/iw, H/ih);
-    const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
-  }
+      const scale = Math.min(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    }
 
-  if (state.bgDim > 0){
-    const g = ctx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, `rgba(0,0,0,${state.bgDim*0.7})`);
-    g.addColorStop(0.55, `rgba(0,0,0,${state.bgDim})`);
-    g.addColorStop(1, `rgba(0,0,0,${state.bgDim*0.85})`);
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,W,H);
+    if (state.bgDim > 0) {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, `rgba(0,0,0,${state.bgDim * 0.7})`);
+      g.addColorStop(0.55, `rgba(0,0,0,${state.bgDim})`);
+      g.addColorStop(1, `rgba(0,0,0,${state.bgDim * 0.85})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+  } else if (state.bgType === "video" && state.bgVideoReady) {
+    const v = state.bgVideoEl;
+    const iw = v.videoWidth;
+    const ih = v.videoHeight;
+
+    if (state.bgMode === "crop" && state.bgCrop) {
+      const { sx, sy, sw, sh } = state.bgCrop;
+      ctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
+    } else if (state.bgMode === "cover") {
+      const scale = Math.max(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    } else if (state.bgMode === "contain") {
+      const scale = Math.min(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    } else {
+      // contain_blur (optional): you can skip blur in live preview to keep it fast
+      const scale = Math.min(W / iw, H / ih);
+      const dw = iw * scale, dh = ih * scale;
+      ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    }
+
+    if (state.bgDim > 0) {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, `rgba(0,0,0,${state.bgDim * 0.7})`);
+      g.addColorStop(0.55, `rgba(0,0,0,${state.bgDim})`);
+      g.addColorStop(1, `rgba(0,0,0,${state.bgDim * 0.85})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
   }
 }
 
 // -------------------- Text rendering --------------------
-function buildFont(style, sizePx){
+function buildFont(style, sizePx) {
   const weight = style.fontWeight ?? 800;
   const family = style.fontFamily ?? "Inter";
   return `${weight} ${sizePx}px "${family}"`;
 }
 
-function wrapTextToBox(text, style, boxPx, fontSize){
+function wrapTextToBox(text, style, boxPx, fontSize) {
   const maxWidth = Math.max(10, boxPx.w);
   const raw = (text ?? "").toString();
   const lines = [];
 
   const inputLines = raw.split("\n");
-  for (const para of inputLines){
+  for (const para of inputLines) {
     const words = para.split(/\s+/).filter(Boolean);
-    if (words.length === 0){ lines.push(""); continue; }
+    if (words.length === 0) { lines.push(""); continue; }
     let line = words[0];
-    for (let i=1;i<words.length;i++){
+    for (let i = 1; i < words.length; i++) {
       const test = line + " " + words[i];
       const w = ctx.measureText(test).width;
       if (w <= maxWidth) line = test;
@@ -254,32 +311,32 @@ function wrapTextToBox(text, style, boxPx, fontSize){
   return { lines, lineHeightPx: lh, heightPx: lines.length * lh };
 }
 
-function textFits(style, text, boxPx, sizePx){
+function textFits(style, text, boxPx, sizePx) {
   ctx.font = buildFont(style, sizePx);
   return wrapTextToBox(text, style, boxPx, sizePx).heightPx <= boxPx.h;
 }
 
-function findBestFontSize(style, text, boxPx){
+function findBestFontSize(style, text, boxPx) {
   const start = clamp(parseInt(style.fontSize ?? 96, 10), 8, 260);
   if (textFits(style, text, boxPx, start)) return start;
-  for (let s = start; s >= 10; s -= 2){
+  for (let s = start; s >= 10; s -= 2) {
     if (textFits(style, text, boxPx, s)) return s;
   }
   return 10;
 }
 
-function drawRoundedRect(x,y,w,h,r){
-  const rr = clamp(r, 0, Math.min(w,h)/2);
+function drawRoundedRect(x, y, w, h, r) {
+  const rr = clamp(r, 0, Math.min(w, h) / 2);
   ctx.beginPath();
-  ctx.moveTo(x+rr, y);
-  ctx.arcTo(x+w, y, x+w, y+h, rr);
-  ctx.arcTo(x+w, y+h, x, y+h, rr);
-  ctx.arcTo(x, y+h, x, y, rr);
-  ctx.arcTo(x, y, x+w, y, rr);
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
 }
 
-function drawTextLayer(layer){
+function drawTextLayer(layer) {
   if (!layer.visible) return;
 
   const box = pxBoxFromPct(layer.box);
@@ -289,14 +346,14 @@ function drawTextLayer(layer){
   const inner = {
     x: box.x + pad,
     y: box.y + pad,
-    w: Math.max(10, box.w - pad*2),
-    h: Math.max(10, box.h - pad*2),
+    w: Math.max(10, box.w - pad * 2),
+    h: Math.max(10, box.h - pad * 2),
   };
 
   let text = (layer.text ?? "").toString();
   if (s.uppercase) text = text.toUpperCase();
 
-  if (s.boxOn){
+  if (s.boxOn) {
     ctx.save();
     ctx.fillStyle = rgbaFromHex(s.boxColor ?? "#000000", clamp(s.boxOpacity ?? 0.35, 0, 1));
     drawRoundedRect(box.x, box.y, box.w, box.h, s.boxRadius ?? 24);
@@ -312,15 +369,15 @@ function drawTextLayer(layer){
   ctx.textBaseline = "top";
 
   const layout = wrapTextToBox(text, s, inner, sizePx);
-  const startY = inner.y + (inner.h - layout.heightPx)/2;
+  const startY = inner.y + (inner.h - layout.heightPx) / 2;
 
   const align = s.align ?? "center";
   ctx.textAlign = align;
   const anchorX = align === "left" ? inner.x
     : align === "right" ? (inner.x + inner.w)
-    : (inner.x + inner.w/2);
+      : (inner.x + inner.w / 2);
 
-  if (s.shadowOn){
+  if (s.shadowOn) {
     ctx.shadowColor = rgbaFromHex(s.shadowColor ?? "#000000", 0.55);
     ctx.shadowBlur = clamp(parseFloat(s.shadowBlur ?? 18), 0, 80);
     ctx.shadowOffsetX = clamp(parseFloat(s.shadowDx ?? 6), -80, 80);
@@ -332,7 +389,7 @@ function drawTextLayer(layer){
     ctx.shadowOffsetY = 0;
   }
 
-  if (s.strokeOn){
+  if (s.strokeOn) {
     ctx.lineJoin = "round";
     ctx.miterLimit = 2;
     ctx.strokeStyle = s.strokeColor ?? "#000";
@@ -341,7 +398,7 @@ function drawTextLayer(layer){
 
   ctx.fillStyle = s.fill ?? "#fff";
 
-  for (let i=0;i<layout.lines.length;i++){
+  for (let i = 0; i < layout.lines.length; i++) {
     const line = layout.lines[i];
     const y = startY + i * layout.lineHeightPx;
     if (s.strokeOn && (s.strokeWidth ?? 0) > 0) ctx.strokeText(line, anchorX, y);
@@ -352,21 +409,21 @@ function drawTextLayer(layer){
 }
 
 // -------------------- Image layer rendering --------------------
-function drawImageLayer(layer){
+function drawImageLayer(layer) {
   if (!layer.visible) return;
   const box = pxBoxFromPct(layer.box);
 
   ctx.save();
   ctx.globalAlpha = clamp(layer.opacity ?? 1, 0, 1);
 
-  if (layer.shadow){
+  if (layer.shadow) {
     ctx.shadowColor = "rgba(0,0,0,0.45)";
     ctx.shadowBlur = 18;
     ctx.shadowOffsetX = 6;
     ctx.shadowOffsetY = 6;
   }
 
-  if (!layer.img){
+  if (!layer.img) {
     ctx.fillStyle = "rgba(255,255,255,0.10)";
     drawRoundedRect(box.x, box.y, box.w, box.h, 18);
     ctx.fill();
@@ -377,7 +434,7 @@ function drawImageLayer(layer){
     ctx.font = `800 16px "Inter"`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("Upload Image", box.x + box.w/2, box.y + box.h/2);
+    ctx.fillText("Upload Image", box.x + box.w / 2, box.y + box.h / 2);
     ctx.restore();
     return;
   }
@@ -386,48 +443,48 @@ function drawImageLayer(layer){
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
 
-  if ((layer.fit ?? "contain") === "cover"){
-    const scale = Math.max(box.w/iw, box.h/ih);
+  if ((layer.fit ?? "contain") === "cover") {
+    const scale = Math.max(box.w / iw, box.h / ih);
     const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, box.x + (box.w - dw)/2, box.y + (box.h - dh)/2, dw, dh);
+    ctx.drawImage(img, box.x + (box.w - dw) / 2, box.y + (box.h - dh) / 2, dw, dh);
   } else {
-    const scale = Math.min(box.w/iw, box.h/ih);
+    const scale = Math.min(box.w / iw, box.h / ih);
     const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, box.x + (box.w - dw)/2, box.y + (box.h - dh)/2, dw, dh);
+    ctx.drawImage(img, box.x + (box.w - dw) / 2, box.y + (box.h - dh) / 2, dw, dh);
   }
 
   ctx.restore();
 }
 
 // -------------------- Handles (used for layers + crop) --------------------
-function getHandles(box){
+function getHandles(box) {
   const s = 10;
   const hs = [
-    { key:"nw", x: box.x - s/2, y: box.y - s/2 },
-    { key:"n",  x: box.x + box.w/2 - s/2, y: box.y - s/2 },
-    { key:"ne", x: box.x + box.w - s/2, y: box.y - s/2 },
-    { key:"e",  x: box.x + box.w - s/2, y: box.y + box.h/2 - s/2 },
-    { key:"se", x: box.x + box.w - s/2, y: box.y + box.h - s/2 },
-    { key:"s",  x: box.x + box.w/2 - s/2, y: box.y + box.h - s/2 },
-    { key:"sw", x: box.x - s/2, y: box.y + box.h - s/2 },
-    { key:"w",  x: box.x - s/2, y: box.y + box.h/2 - s/2 },
+    { key: "nw", x: box.x - s / 2, y: box.y - s / 2 },
+    { key: "n", x: box.x + box.w / 2 - s / 2, y: box.y - s / 2 },
+    { key: "ne", x: box.x + box.w - s / 2, y: box.y - s / 2 },
+    { key: "e", x: box.x + box.w - s / 2, y: box.y + box.h / 2 - s / 2 },
+    { key: "se", x: box.x + box.w - s / 2, y: box.y + box.h - s / 2 },
+    { key: "s", x: box.x + box.w / 2 - s / 2, y: box.y + box.h - s / 2 },
+    { key: "sw", x: box.x - s / 2, y: box.y + box.h - s / 2 },
+    { key: "w", x: box.x - s / 2, y: box.y + box.h / 2 - s / 2 },
   ];
-  return hs.map(h => ({...h, w:s, h:s}));
+  return hs.map(h => ({ ...h, w: s, h: s }));
 }
-function hitTestHandle(mx,my, box){
+function hitTestHandle(mx, my, box) {
   const handles = getHandles(box);
-  for (const h of handles){
-    if (mx >= h.x && mx <= h.x+h.w && my >= h.y && my <= h.y+h.h) return h.key;
+  for (const h of handles) {
+    if (mx >= h.x && mx <= h.x + h.w && my >= h.y && my <= h.y + h.h) return h.key;
   }
   return null;
 }
-function hitTestBox(mx,my, box){
-  return (mx >= box.x && mx <= box.x+box.w && my >= box.y && my <= box.y+box.h);
+function hitTestBox(mx, my, box) {
+  return (mx >= box.x && mx <= box.x + box.w && my >= box.y && my <= box.y + box.h);
 }
 
 // -------------------- Background Crop Overlay (on canvas) --------------------
 // We draw crop rectangle in CANVAS space for user interaction
-function getBgCropCanvasRect(){
+function getBgCropCanvasRect() {
   const { W, H } = getCanvasWH();
   if (!state.bgImage || !state.bgCrop) return null;
 
@@ -444,7 +501,7 @@ function getBgCropCanvasRect(){
   const ih = img.naturalHeight || img.height;
 
   // Fit full image into canvas (contain) for crop editor overlay
-  const scale = Math.min(W/iw, H/ih);
+  const scale = Math.min(W / iw, H / ih);
   const dw = iw * scale, dh = ih * scale;
   const ox = (W - dw) / 2;
   const oy = (H - dh) / 2;
@@ -459,7 +516,7 @@ function getBgCropCanvasRect(){
   return { x, y, w, h, scale, ox, oy, dw, dh, iw, ih };
 }
 
-function drawBgCropOverlay(){
+function drawBgCropOverlay() {
   if (!state.bgImage || !state.bgCrop || state.bgMode !== "crop") return;
 
   const { W, H } = getCanvasWH();
@@ -470,7 +527,7 @@ function drawBgCropOverlay(){
 
   // darken outside crop
   ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.fillRect(0,0,W,H);
+  ctx.fillRect(0, 0, W, H);
 
   // clear inside crop area
   ctx.clearRect(r.x, r.y, r.w, r.h);
@@ -478,13 +535,13 @@ function drawBgCropOverlay(){
   // draw border
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
-  ctx.setLineDash([6,4]);
+  ctx.setLineDash([6, 4]);
   ctx.strokeRect(r.x, r.y, r.w, r.h);
   ctx.setLineDash([]);
 
   // handles
   ctx.fillStyle = "rgba(255,255,255,0.95)";
-  for (const h of getHandles({x:r.x,y:r.y,w:r.w,h:r.h})) ctx.fillRect(h.x, h.y, h.w, h.h);
+  for (const h of getHandles({ x: r.x, y: r.y, w: r.w, h: r.h })) ctx.fillRect(h.x, h.y, h.w, h.h);
 
   // info
   ctx.fillStyle = "rgba(255,255,255,0.9)";
@@ -497,7 +554,7 @@ function drawBgCropOverlay(){
 }
 
 // Convert crop editor move/resize in CANVAS space back into SOURCE crop
-function setBgCropFromCanvasRect(newRectCanvas){
+function setBgCropFromCanvasRect(newRectCanvas) {
   const r = getBgCropCanvasRect();
   if (!r) return;
 
@@ -518,7 +575,7 @@ function setBgCropFromCanvasRect(newRectCanvas){
 }
 
 // Aspect-locked resize for crop box (matches output format)
-function resizeBgCropAspectLocked(startRect, handle, dx, dy){
+function resizeBgCropAspectLocked(startRect, handle, dx, dy) {
   const ar = getCanvasAspect();
   let { x, y, w, h } = startRect;
 
@@ -548,7 +605,7 @@ function resizeBgCropAspectLocked(startRect, handle, dx, dy){
   let newW = w;
   let newH = h;
 
-  if (primary === "x"){
+  if (primary === "x") {
     if (handle.includes("e")) newW = w + dx;
     else if (handle.includes("w")) newW = w - dx;
     else newW = w + dx; // corner
@@ -566,15 +623,15 @@ function resizeBgCropAspectLocked(startRect, handle, dx, dy){
 }
 
 // -------------------- Layer selection UI --------------------
-function selectedLayer(){
+function selectedLayer() {
   return state.layers.find(l => l.id === state.selectedLayerId) || null;
 }
 
-function refreshLayersUI(){
+function refreshLayersUI() {
   const list = $("layersList");
   list.innerHTML = "";
 
-  for (const layer of state.layers){
+  for (const layer of state.layers) {
     const item = document.createElement("div");
     item.className = "layer-item" + (layer.id === state.selectedLayerId ? " active" : "");
     item.dataset.id = layer.id;
@@ -619,27 +676,27 @@ function refreshLayersUI(){
 }
 
 // -------------------- Props UI --------------------
-function showPropsNone(){
+function showPropsNone() {
   $("noSelection").classList.remove("hidden");
   $("layerPropsText").classList.add("hidden");
   $("layerPropsImage").classList.add("hidden");
 }
-function showPropsText(){
+function showPropsText() {
   $("noSelection").classList.add("hidden");
   $("layerPropsText").classList.remove("hidden");
   $("layerPropsImage").classList.add("hidden");
 }
-function showPropsImage(){
+function showPropsImage() {
   $("noSelection").classList.add("hidden");
   $("layerPropsText").classList.add("hidden");
   $("layerPropsImage").classList.remove("hidden");
 }
 
-function refreshPropsUI(){
+function refreshPropsUI() {
   const layer = selectedLayer();
-  if (!layer){ showPropsNone(); return; }
+  if (!layer) { showPropsNone(); return; }
 
-  if (layer.type === "text"){
+  if (layer.type === "text") {
     showPropsText();
     const s = layer.style;
 
@@ -673,7 +730,7 @@ function refreshPropsUI(){
     return;
   }
 
-  if (layer.type === "image"){
+  if (layer.type === "image") {
     showPropsImage();
     $("imgPropName").value = layer.name ?? "";
     $("imgPropOpacity").value = clamp(layer.opacity ?? 1, 0, 1);
@@ -683,7 +740,7 @@ function refreshPropsUI(){
   }
 }
 
-function bindTextProps(){
+function bindTextProps() {
   const bind = (id, fn) => {
     $(id).addEventListener("input", () => {
       const layer = selectedLayer();
@@ -732,7 +789,7 @@ function bindTextProps(){
   });
 }
 
-function bindImageProps(){
+function bindImageProps() {
   $("imgPropName").addEventListener("input", () => {
     const layer = selectedLayer();
     if (!layer || layer.type !== "image") return;
@@ -777,7 +834,7 @@ function bindImageProps(){
 }
 
 // -------------------- Render selection for layers --------------------
-function drawLayerSelection(){
+function drawLayerSelection() {
   const layer = selectedLayer();
   if (!layer || !layer.visible) return;
 
@@ -789,14 +846,14 @@ function drawLayerSelection(){
   // safe area
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
-  ctx.setLineDash([4,6]);
-  ctx.strokeRect(safe.x*w, safe.y*h, safe.w*w, safe.h*h);
+  ctx.setLineDash([4, 6]);
+  ctx.strokeRect(safe.x * w, safe.y * h, safe.w * w, safe.h * h);
   ctx.setLineDash([]);
 
   // selection box
   ctx.strokeStyle = "rgba(90,167,255,0.95)";
   ctx.lineWidth = 2;
-  ctx.setLineDash([6,4]);
+  ctx.setLineDash([6, 4]);
   ctx.strokeRect(box.x, box.y, box.w, box.h);
   ctx.setLineDash([]);
 
@@ -808,7 +865,7 @@ function drawLayerSelection(){
 }
 
 // -------------------- Full render --------------------
-function render({ forExport = false } = {}){
+function render({ forExport = false } = {}) {
   drawBackground();
 
   // Show crop overlay only while editing (never in export)
@@ -822,7 +879,7 @@ function render({ forExport = false } = {}){
 
 
   // draw layers
-  for (const layer of state.layers){
+  for (const layer of state.layers) {
     if (!layer.visible) continue;
     if (layer.type === "image") drawImageLayer(layer);
     if (layer.type === "text") drawTextLayer(layer);
@@ -836,7 +893,7 @@ function render({ forExport = false } = {}){
 
 
 // -------------------- Mouse mapping --------------------
-function getMousePos(evt){
+function getMousePos(evt) {
   const rect = canvas.getBoundingClientRect();
   const { W, H } = getCanvasWH();
   const x = (evt.clientX - rect.left) * (W / rect.width);
@@ -845,36 +902,36 @@ function getMousePos(evt){
 }
 
 // -------------------- Background crop interaction --------------------
-function bgCropHitTest(mx,my){
+function bgCropHitTest(mx, my) {
   if (state.bgMode !== "crop") return null;
   const r = getBgCropCanvasRect();
   if (!r) return null;
 
   const box = { x: r.x, y: r.y, w: r.w, h: r.h };
-  const hnd = hitTestHandle(mx,my,box);
-  if (hnd) return { type:"handle", handle: hnd, box };
-  if (hitTestBox(mx,my,box)) return { type:"box", box };
+  const hnd = hitTestHandle(mx, my, box);
+  if (hnd) return { type: "handle", handle: hnd, box };
+  if (hitTestBox(mx, my, box)) return { type: "box", box };
   return null;
 }
 
 // -------------------- Layer interaction --------------------
-function layerHitTestSelect(mx,my){
+function layerHitTestSelect(mx, my) {
   // select topmost layer under cursor
-  for (let i=state.layers.length-1; i>=0; i--){
+  for (let i = state.layers.length - 1; i >= 0; i--) {
     const L = state.layers[i];
     if (!L.visible) continue;
     const b = pxBoxFromPct(L.box);
-    if (hitTestBox(mx,my,b)) return L;
+    if (hitTestBox(mx, my, b)) return L;
   }
   return null;
 }
 
 canvas.addEventListener("mousedown", (e) => {
-  const { x:mx, y:my } = getMousePos(e);
+  const { x: mx, y: my } = getMousePos(e);
 
   // 1) If in crop mode and user clicks crop box/handle -> start bg crop drag
-  const bgHit = bgCropHitTest(mx,my);
-  if (bgHit){
+  const bgHit = bgCropHitTest(mx, my);
+  if (bgHit) {
     const r = getBgCropCanvasRect();
     state.bgDragging = {
       mode: bgHit.type === "handle" ? "resize" : "move",
@@ -889,8 +946,8 @@ canvas.addEventListener("mousedown", (e) => {
 
   // 2) Otherwise handle layers
   // Select if clicking a different layer
-  const top = layerHitTestSelect(mx,my);
-  if (top && top.id !== state.selectedLayerId){
+  const top = layerHitTestSelect(mx, my);
+  if (top && top.id !== state.selectedLayerId) {
     state.selectedLayerId = top.id;
     refreshLayersUI();
     refreshPropsUI();
@@ -900,28 +957,28 @@ canvas.addEventListener("mousedown", (e) => {
   if (!layer) return;
 
   const box = pxBoxFromPct(layer.box);
-  const handle = hitTestHandle(mx,my,box);
-  if (handle){
-    state.dragging = { id: layer.id, mode:"resize", handle, startX: mx, startY: my, startBox: { ...box } };
+  const handle = hitTestHandle(mx, my, box);
+  if (handle) {
+    state.dragging = { id: layer.id, mode: "resize", handle, startX: mx, startY: my, startBox: { ...box } };
     return;
   }
-  if (hitTestBox(mx,my,box)){
-    state.dragging = { id: layer.id, mode:"move", startX: mx, startY: my, startBox: { ...box } };
+  if (hitTestBox(mx, my, box)) {
+    state.dragging = { id: layer.id, mode: "move", startX: mx, startY: my, startBox: { ...box } };
     return;
   }
 });
 
 window.addEventListener("mousemove", (e) => {
-  const { x:mx, y:my } = getMousePos(e);
+  const { x: mx, y: my } = getMousePos(e);
 
   // Background crop drag
-  if (state.bgDragging){
+  if (state.bgDragging) {
     const dx = mx - state.bgDragging.startX;
     const dy = my - state.bgDragging.startY;
 
     let rect = { ...state.bgDragging.startRect };
 
-    if (state.bgDragging.mode === "move"){
+    if (state.bgDragging.mode === "move") {
       rect.x += dx;
       rect.y += dy;
     } else {
@@ -947,9 +1004,9 @@ window.addEventListener("mousemove", (e) => {
 
   let box = { ...state.dragging.startBox };
 
-  if (state.dragging.mode === "move"){
+  if (state.dragging.mode === "move") {
     let ndx = dx, ndy = dy;
-    if (e.shiftKey){
+    if (e.shiftKey) {
       if (Math.abs(dx) > Math.abs(dy)) ndy = 0;
       else ndx = 0;
     }
@@ -959,25 +1016,25 @@ window.addEventListener("mousemove", (e) => {
   } else {
     const hnd = state.dragging.handle;
     const apply = (left, top, right, bottom) => {
-      if (left){
+      if (left) {
         const nx = clamp(box.x + dx, 0, box.x + box.w - minSize);
         box.w = box.x + box.w - nx; box.x = nx;
       }
       if (right) box.w = clamp(box.w + dx, minSize, W - box.x);
-      if (top){
+      if (top) {
         const ny = clamp(box.y + dy, 0, box.y + box.h - minSize);
         box.h = box.y + box.h - ny; box.y = ny;
       }
       if (bottom) box.h = clamp(box.h + dy, minSize, H - box.y);
     };
-    if (hnd==="nw") apply(true,true,false,false);
-    if (hnd==="n")  apply(false,true,false,false);
-    if (hnd==="ne") apply(false,true,true,false);
-    if (hnd==="e")  apply(false,false,true,false);
-    if (hnd==="se") apply(false,false,true,true);
-    if (hnd==="s")  apply(false,false,false,true);
-    if (hnd==="sw") apply(true,false,false,true);
-    if (hnd==="w")  apply(true,false,false,false);
+    if (hnd === "nw") apply(true, true, false, false);
+    if (hnd === "n") apply(false, true, false, false);
+    if (hnd === "ne") apply(false, true, true, false);
+    if (hnd === "e") apply(false, false, true, false);
+    if (hnd === "se") apply(false, false, true, true);
+    if (hnd === "s") apply(false, false, false, true);
+    if (hnd === "sw") apply(true, false, false, true);
+    if (hnd === "w") apply(true, false, false, false);
 
     box.x = clamp(box.x, 0, W - minSize);
     box.y = clamp(box.y, 0, H - minSize);
@@ -990,7 +1047,7 @@ window.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("mouseup", () => {
-  if (state.bgDragging){
+  if (state.bgDragging) {
     state.bgDragging = null;
     setStatus("Background crop updated");
     render();
@@ -999,22 +1056,81 @@ window.addEventListener("mouseup", () => {
 });
 
 // -------------------- Background load (file + paste) --------------------
-$("imageInput").addEventListener("change", async (e) => {
+// $("imageInput").addEventListener("change", async (e) => {
+//   const file = e.target.files?.[0];
+//   if (!file) return;
+//   const img = await loadImageFromBlob(file);
+//   state.bgImage = img;
+//   state.bgImageSrc = img.src;
+
+//   initCenteredBgCrop();
+//   render();
+//   setStatus("Background loaded (crop ready)");
+// });
+
+$("bgFileInput").addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
+
+  const url = URL.createObjectURL(file);
+
+  if (file.type.startsWith("video/")) {
+    // ---- VIDEO BACKGROUND ----
+    const v = state.bgVideoEl;
+    state.bgType = "video";
+    state.bgVideoSrc = url;
+    state.bgVideoReady = false;
+
+    v.src = url;
+    v.loop = true;
+    v.muted = true;
+    v.playsInline = true;
+
+    v.onloadedmetadata = () => {
+      state.bgVideoReady = true;
+
+      // Initialize crop box based on video dimensions
+      initCenteredBgCropForSource(v.videoWidth, v.videoHeight);
+
+      v.play().catch(() => { });
+      startVideoRenderLoop();
+      setStatus("Video loaded (crop ready)");
+    };
+
+    return;
+  }
+
+  // ---- IMAGE BACKGROUND ----
   const img = await loadImageFromBlob(file);
+  state.bgType = "image";
   state.bgImage = img;
   state.bgImageSrc = img.src;
 
-  initCenteredBgCrop();
+  initCenteredBgCrop(); // existing image crop init
   render();
-  setStatus("Background loaded (crop ready)");
+  setStatus("Image loaded (crop ready)");
 });
+
+function initCenteredBgCropForSource(iw, ih) {
+  const ar = getCanvasAspect();
+
+  let sw = iw;
+  let sh = sw / ar;
+  if (sh > ih) {
+    sh = ih;
+    sw = sh * ar;
+  }
+
+  const sx = (iw - sw) / 2;
+  const sy = (ih - sh) / 2;
+
+  state.bgCrop = { sx, sy, sw, sh };
+}
 
 window.addEventListener("paste", async (e) => {
   const items = e.clipboardData?.items || [];
-  for (const it of items){
-    if (it.type && it.type.startsWith("image/")){
+  for (const it of items) {
+    if (it.type && it.type.startsWith("image/")) {
       const blob = it.getAsFile();
       if (!blob) continue;
       const img = await loadImageFromBlob(blob);
@@ -1035,7 +1151,7 @@ $("formatSelect").addEventListener("change", () => {
   applyCanvasFormat();
 
   // Keep crop aspect locked to new format: re-center crop (best UX)
-  if (state.bgImage){
+  if (state.bgImage) {
     initCenteredBgCrop();
   }
 
@@ -1047,7 +1163,7 @@ $("bgModeSelect").addEventListener("change", () => {
   state.bgMode = $("bgModeSelect").value;
 
   // Ensure crop exists if user switches to crop
-  if (state.bgMode === "crop" && state.bgImage && !state.bgCrop){
+  if (state.bgMode === "crop" && state.bgImage && !state.bgCrop) {
     initCenteredBgCrop();
   }
 
@@ -1088,7 +1204,7 @@ $("jpgQuality").addEventListener("input", () => {
 // -------------------- Layer buttons --------------------
 $("btnAddTextLayer").addEventListener("click", () => {
   const l = makeTextLayer({
-    name: `Text ${state.layers.length+1}`,
+    name: `Text ${state.layers.length + 1}`,
     text: "TYPE HERE",
     box: { x: 0.12, y: 0.45, w: 0.76, h: 0.20 }
   });
@@ -1103,7 +1219,7 @@ $("btnAddTextLayer").addEventListener("click", () => {
 });
 
 $("btnAddImageLayer").addEventListener("click", () => {
-  const l = makeImageLayer({ name: `Logo ${state.layers.length+1}` });
+  const l = makeImageLayer({ name: `Logo ${state.layers.length + 1}` });
   state.layers.push(l);
   state.selectedLayerId = l.id;
   refreshLayersUI();
@@ -1117,8 +1233,8 @@ $("btnDeleteLayer").addEventListener("click", () => {
   if (!id) return;
   const idx = state.layers.findIndex(l => l.id === id);
   if (idx === -1) return;
-  state.layers.splice(idx,1);
-  state.selectedLayerId = state.layers[idx-1]?.id || state.layers[0]?.id || null;
+  state.layers.splice(idx, 1);
+  state.selectedLayerId = state.layers[idx - 1]?.id || state.layers[0]?.id || null;
   refreshLayersUI();
   refreshPropsUI();
   render();
@@ -1132,7 +1248,7 @@ $("btnDuplicateLayer").addEventListener("click", () => {
   copy.name = (layer.name || "Layer") + " copy";
   copy.box = { ...layer.box, x: clamp(layer.box.x + 0.02, 0, 0.98), y: clamp(layer.box.y + 0.02, 0, 0.98) };
 
-  if (layer.type === "image"){
+  if (layer.type === "image") {
     copy.img = layer.img || null;
     copy.imgSrc = layer.imgSrc || "";
   }
@@ -1147,8 +1263,8 @@ $("btnBringForward").addEventListener("click", () => {
   const id = state.selectedLayerId;
   if (!id) return;
   const idx = state.layers.findIndex(l => l.id === id);
-  if (idx === -1 || idx === state.layers.length-1) return;
-  [state.layers[idx], state.layers[idx+1]] = [state.layers[idx+1], state.layers[idx]];
+  if (idx === -1 || idx === state.layers.length - 1) return;
+  [state.layers[idx], state.layers[idx + 1]] = [state.layers[idx + 1], state.layers[idx]];
   refreshLayersUI(); render();
 });
 
@@ -1157,8 +1273,68 @@ $("btnSendBackward").addEventListener("click", () => {
   if (!id) return;
   const idx = state.layers.findIndex(l => l.id === id);
   if (idx <= 0) return;
-  [state.layers[idx], state.layers[idx-1]] = [state.layers[idx-1], state.layers[idx]];
+  [state.layers[idx], state.layers[idx - 1]] = [state.layers[idx - 1], state.layers[idx]];
   refreshLayersUI(); render();
+});
+
+function downloadDataUrl(dataUrl, filename) {
+  const a = document.createElement("a");
+  a.download = filename;
+  a.href = dataUrl;
+  a.click();
+}
+
+function downloadText(text, filename, mime = "application/json") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.download = filename;
+  a.href = url;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+/**
+ * Renders ONLY overlays (layers) to a transparent PNG at the target canvas size.
+ * IMPORTANT: This needs render() to support an "overlayOnly" mode (see note below).
+ */
+$("btnExportOverlay").addEventListener("click", () => {
+  const { w, h } = formats[state.formatKey];
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+
+  // 1) draw transparent overlay only (no background image / dim / crop UI / selection UI)
+  render({ forExport: true, overlayOnly: true });
+
+  // 2) export transparent PNG
+  const dataUrl = canvas.toDataURL("image/png");
+
+  // 3) restore normal editor rendering
+  render({ forExport: false, overlayOnly: false });
+
+  downloadDataUrl(dataUrl, `overlay_${state.formatKey}_${w}x${h}_${ts}.png`);
+  setStatus(`Exported Overlay PNG (${w}×${h})`);
+});
+
+$("btnExportProject").addEventListener("click", () => {
+  const { w, h } = formats[state.formatKey];
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+
+  // Keep it portable: store crop + layers + format + bgMode/bgDim.
+  // Don't try to embed full image binary; just keep bgImageSrc if you want.
+  const project = {
+    version: 1,
+    formatKey: state.formatKey,
+    format: { w, h },
+    bgMode: state.bgMode,
+    bgDim: state.bgDim,
+    // bgCrop is in SOURCE IMAGE pixel coords (sx,sy,sw,sh) already in your code :contentReference[oaicite:3]{index=3}
+    bgCrop: state.bgCrop,
+    // layers includes text + image layers (image layers store imgSrc) :contentReference[oaicite:4]{index=4}
+    layers: state.layers
+  };
+
+  downloadText(JSON.stringify(project, null, 2), `project_${state.formatKey}_${w}x${h}_${ts}.json`);
+  setStatus("Exported Project JSON");
 });
 
 // -------------------- Export --------------------
@@ -1170,7 +1346,7 @@ $("btnExport").addEventListener("click", () => {
 
   // 2) export
   let dataUrl = "";
-  if (type === "png"){
+  if (type === "png") {
     dataUrl = canvas.toDataURL("image/png");
   } else {
     const q = clamp(parseFloat($("jpgQuality").value || "0.92"), 0.4, 1);
@@ -1181,7 +1357,7 @@ $("btnExport").addEventListener("click", () => {
   render({ forExport: false });
 
   const { w, h } = formats[state.formatKey];
-  const ts = new Date().toISOString().replace(/[:.]/g,"-");
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const a = document.createElement("a");
   a.download = `design_${state.formatKey}_${w}x${h}_${ts}.${type}`;
   a.href = dataUrl;
@@ -1191,7 +1367,7 @@ $("btnExport").addEventListener("click", () => {
 
 
 // -------------------- New project --------------------
-function resetProject(){
+function resetProject() {
   state.bgImage = null;
   state.bgImageSrc = "";
   state.bgCrop = null;
@@ -1223,7 +1399,7 @@ function resetProject(){
 $("btnNew").addEventListener("click", resetProject);
 
 // -------------------- Init --------------------
-function init(){
+function init() {
   state.dpiScale = 1;
   $("formatSelect").value = state.formatKey;
   $("bgModeSelect").value = state.bgMode;
@@ -1236,6 +1412,8 @@ function init(){
 
   applyCanvasFormat();
   resetProject();
+  state.bgVideoEl = document.getElementById("bgVideo");
+
 }
 
 init();

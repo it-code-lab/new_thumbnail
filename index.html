@@ -63,7 +63,8 @@
 
         <div class="row">
           <label>Upload Background Image</label>
-          <input id="imageInput" type="file" accept="image/*" />
+          <input id="bgFileInput" type="file" accept="image/*,video/*" />
+
           <div class="hint">Tip: you can also paste an image (Ctrl+V).</div>
         </div>
 
@@ -74,7 +75,7 @@
             <button class="btn" id="btnResetCrop">Reset Crop</button>
           </div>
           <button class="btn" id="btnToggleCropOverlay">
-            Hide Crop Overlay
+            Show Crop Overlay
           </button>          
           <div class="hint">
             In Crop mode: drag the crop box on canvas. Handles resize. Aspect is locked to selected format.
@@ -105,6 +106,7 @@
           <span class="kbd">Layers:</span> drag/resize text/logo
         </div>
       </div>
+      <video id="bgVideo" class="hidden" playsinline muted></video>
 
       <div class="export-bar">
         <div class="export-left">
@@ -121,6 +123,10 @@
           </div>
 
           <button id="btnExport" class="btn primary">Download</button>
+          <button id="btnExport" class="btn primary">Download</button>
+          <button id="btnExportOverlay" class="btn">Overlay PNG</button>
+          <button id="btnExportProject" class="btn">Project JSON</button>
+
         </div>
 
         <div class="export-right">
@@ -354,5 +360,175 @@
   </main>
 
   <script src="app.js"></script>
+<!-- =========================
+     HOW TO GUIDE (Toggle)
+     Paste near bottom of index.html, before </body>
+========================== -->
+<section class="howtoWrap">
+  <details class="howtoDetails">
+    <summary class="howtoSummary">
+      📘 How to Use This Editor (click to show/hide)
+    </summary>
+
+    <div class="howtoBody">
+      <h2>Thumbnail & Video Overlay Editor — Quick User Guide</h2>
+      <p>
+        This tool helps you design professional <b>thumbnails</b>, <b>Pinterest posts</b>, and <b>video overlays</b>
+        using text + logo layers, smart cropping, and clean exports.
+      </p>
+
+      <hr class="howtoHr" />
+
+      <h3>1) Choose Output Format (Very Important)</h3>
+      <p>Select the target format <b>before</b> designing. The canvas size defines what gets exported.</p>
+      <ul>
+        <li><b>YouTube Thumbnail</b> — 1280×720 (16:9)</li>
+        <li><b>Shorts / Reels / Stories</b> — 1080×1920 (9:16)</li>
+        <li><b>Pinterest Post</b> — 1000×1500 (2:3)</li>
+      </ul>
+
+      <h3>2) Upload Background (Image or Video)</h3>
+      <ul>
+        <li>Upload a <b>background image</b> (JPG/PNG) or <b>video</b> (MP4).</li>
+        <li>The background will render inside the canvas at the selected output size.</li>
+      </ul>
+
+      <h3>3) Background Modes (How the background fits)</h3>
+      <ul>
+        <li><b>Crop</b> (Recommended): Choose exactly which part of the image/video is used.</li>
+        <li><b>Cover</b>: Fills the canvas; crops from center automatically.</li>
+        <li><b>Contain</b>: Shows full image/video; may add bars.</li>
+        <li><b>Contain + Blur</b>: Keeps full content and fills bars with a blurred background.</li>
+      </ul>
+
+      <h3>4) Crop the Background (Crop Mode Only)</h3>
+      <ul>
+        <li>Drag the crop box to reposition the selected area.</li>
+        <li>Resize using handles to reframe (aspect ratio stays correct).</li>
+        <li><b>What you see inside the crop box</b> is what gets exported.</li>
+      </ul>
+
+      <h3>5) Hide Crop Overlay (After you’re satisfied)</h3>
+      <ul>
+        <li>Click <b>Hide Crop Overlay</b> to remove the crop box from the canvas while editing.</li>
+        <li>The crop selection stays active—only the UI overlay hides.</li>
+        <li>Crop UI is never included in exports.</li>
+      </ul>
+
+      <h3>6) Dim the Background (Optional)</h3>
+      <ul>
+        <li>Use the <b>Dim Background</b> slider to darken image/video for better text readability.</li>
+        <li>Text and logos remain crisp on top.</li>
+      </ul>
+
+      <h3>7) Add Overlays (Text & Logos)</h3>
+      <h4>Text Layers</h4>
+      <ul>
+        <li>Add multiple text blocks (Hook / Subtext / CTA).</li>
+        <li>Each text block can have its own font, size, color, outline (stroke), shadow, and background pill.</li>
+        <li>Drag to move; resize using handles.</li>
+      </ul>
+
+      <h4>Logo / Image Layers</h4>
+      <ul>
+        <li>Upload a small PNG logo and place it anywhere.</li>
+        <li>Resize and reposition like any other layer.</li>
+        <li>Transparent PNG logos work best.</li>
+      </ul>
+
+      <h3>8) Selection & Editing Tips</h3>
+      <ul>
+        <li>Click a layer to select it (you’ll see a dashed selection box).</li>
+        <li>Selection boxes are only for editing and <b>do not appear in exports</b>.</li>
+      </ul>
+
+      <h3>9) Export Options</h3>
+      <h4>Download (Image)</h4>
+      <ul>
+        <li>Exports the final image: background + overlays in the chosen output size.</li>
+        <li>No crop box / no selection outlines included.</li>
+        <li>Choose <b>PNG</b> for best quality, <b>JPG</b> for smaller size.</li>
+      </ul>
+
+      <h4>Overlay PNG (For Video)</h4>
+      <ul>
+        <li>Exports a <b>transparent PNG</b> with only text + logos.</li>
+        <li>Used for applying overlays on videos with FFmpeg (baked into MP4).</li>
+      </ul>
+
+      <h4>Project JSON</h4>
+      <ul>
+        <li>Exports your project settings: format, crop, dim, and layer positions.</li>
+        <li>Used together with Overlay PNG for video automation.</li>
+      </ul>
+
+      <h3>10) Apply Overlays on Video (Python + FFmpeg)</h3>
+      <p>After exporting <b>Overlay PNG</b> + <b>Project JSON</b>, run:</p>
+      <pre class="howtoCode"><code>python overlay_on_video.py \
+  --input-video input.mp4 \
+  --overlay-png overlay.png \
+  --project-json project.json \
+  --output final_video.mp4 \
+  --keep-audio</code></pre>
+
+      <p>The final MP4 will be cropped/scaled to your chosen format and will include all overlays.</p>
+
+      <h3>Best Practices (Pro Tips)</h3>
+      <ul>
+        <li>Use <b>Crop mode</b> for thumbnails (best framing control).</li>
+        <li>Keep hook text short: <b>3–6 words</b>.</li>
+        <li>Use outline or pill background to ensure readability.</li>
+        <li>Avoid placing important text too close to edges.</li>
+        <li>Use <b>Dim Background</b> instead of excessive shadows.</li>
+      </ul>
+
+      <div class="howtoCallout">
+        <b>Remember:</b> The <b>Canvas = Final Output</b>.  
+        Only the canvas content exports (UI overlays like selection boxes/crop guides never export).
+      </div>
+    </div>
+  </details>
+</section>
+
+<style>
+  /* Optional: keep this here or move into styles.css */
+  .howtoWrap{ margin: 28px 0 12px; padding: 0 10px; }
+  .howtoDetails{
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .howtoSummary{
+    cursor: pointer;
+    padding: 14px 16px;
+    font-weight: 700;
+    user-select: none;
+  }
+  .howtoBody{
+    padding: 0 16px 16px;
+    line-height: 1.5;
+  }
+  .howtoBody h2{ margin: 8px 0 10px; font-size: 20px; }
+  .howtoBody h3{ margin: 18px 0 8px; font-size: 16px; }
+  .howtoBody h4{ margin: 12px 0 6px; font-size: 14px; opacity: 0.95; }
+  .howtoBody ul{ margin: 8px 0 0 18px; }
+  .howtoHr{ border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 14px 0; }
+  .howtoCode{
+    background: rgba(0,0,0,0.35);
+    padding: 12px;
+    border-radius: 10px;
+    overflow-x: auto;
+    margin: 8px 0 10px;
+  }
+  .howtoCallout{
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+</style>
+
 </body>
 </html>
