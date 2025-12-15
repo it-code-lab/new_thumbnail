@@ -3,10 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Thumbnail & Pinterest Post Maker (Layers)</title>
+  <title>Thumbnail & Pinterest Post Maker (BG Crop)</title>
   <link rel="stylesheet" href="styles.css" />
 
-  <!-- Optional: Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Inter:wght@400;600;800&family=Montserrat:wght@500;700;900&family=Oswald:wght@400;600;700&display=swap" rel="stylesheet">
@@ -17,7 +16,7 @@
       <div class="logo">🖼️</div>
       <div>
         <div class="title">Thumbnail + Pinterest Post Maker</div>
-        <div class="subtitle">Text + Image Layers • Drag/Resize • Presets • Export</div>
+        <div class="subtitle">Background Crop • Layers • Drag/Resize • Export</div>
       </div>
     </div>
 
@@ -29,7 +28,7 @@
   </header>
 
   <main class="layout">
-    <!-- LEFT: Project + Layers -->
+    <!-- LEFT -->
     <aside class="panel">
       <section class="card">
         <h2>Project</h2>
@@ -44,12 +43,14 @@
         </div>
 
         <div class="row">
-          <label>Background Fit</label>
-          <select id="bgFitSelect">
-            <option value="cover">Cover (crop)</option>
+          <label>Background Mode</label>
+          <select id="bgModeSelect">
+            <option value="crop" selected>Crop (choose area)</option>
+            <option value="cover">Cover (center crop)</option>
             <option value="contain">Contain (letterbox)</option>
             <option value="contain_blur">Contain + Blur Fill</option>
           </select>
+          <div class="hint">Tip: Use <b>Crop</b> to frame a landscape image perfectly for thumbnails.</div>
         </div>
 
         <div class="row">
@@ -67,23 +68,16 @@
         </div>
 
         <div class="row">
-          <label>Smart Modern Hook Presets</label>
-          <input id="smartTitle" type="text" placeholder="Paste your video title here…" />
-          <div class="grid2" style="margin-top:10px;">
-            <button class="btn primary" id="btnGenerateHooks">Generate 10 Hooks</button>
-            <button class="btn" id="btnClearHooks">Clear</button>
-          </div>
-          <div class="hint">Click a hook to apply it to the selected Text layer (or it will create a new Hook layer).</div>
-          <div id="hooksList" class="hooks"></div>
-        </div>
-
-        <div class="row">
-          <label>Quick Templates</label>
+          <label>Background Crop Controls</label>
           <div class="grid2">
-            <button class="btn" id="tplYouTubeHook">YT: Hook + Badge</button>
-            <button class="btn" id="tplYouTubeCenter">YT: Big Center Hook</button>
-            <button class="btn" id="tplPinterestTitle">Pin: Title + Bullets</button>
-            <button class="btn" id="tplStoryPunchy">Story: Punchy Title</button>
+            <button class="btn" id="btnCenterCrop">Center Crop</button>
+            <button class="btn" id="btnResetCrop">Reset Crop</button>
+          </div>
+          <button class="btn" id="btnToggleCropOverlay">
+            Hide Crop Overlay
+          </button>          
+          <div class="hint">
+            In Crop mode: drag the crop box on canvas. Handles resize. Aspect is locked to selected format.
           </div>
         </div>
       </section>
@@ -98,17 +92,17 @@
             <button id="btnSendBackward" class="btn">Down</button>
           </div>
         </div>
-
         <div id="layersList" class="layers"></div>
       </section>
     </aside>
 
-    <!-- CENTER: Canvas -->
+    <!-- CENTER -->
     <section class="stage">
       <div class="stage-inner">
         <canvas id="canvas"></canvas>
         <div class="stage-help">
-          <span class="kbd">Drag</span> to move • <span class="kbd">Shift+Drag</span> to constrain • <span class="kbd">Handles</span> to resize
+          <span class="kbd">Crop mode:</span> drag crop box • handles resize •
+          <span class="kbd">Layers:</span> drag/resize text/logo
         </div>
       </div>
 
@@ -135,7 +129,7 @@
       </div>
     </section>
 
-    <!-- RIGHT: Selected Layer Props -->
+    <!-- RIGHT -->
     <aside class="panel">
       <section class="card" id="layerPropsCard">
         <h2>Selected Layer</h2>
@@ -150,8 +144,8 @@
 
           <div class="row">
             <label>Text</label>
-            <textarea id="propText" rows="4" placeholder="Type your hook / title / bullets..."></textarea>
-            <div class="hint">Use new lines for manual line breaks. Auto-wrap fits within the box.</div>
+            <textarea id="propText" rows="4"></textarea>
+            <div class="hint">New lines create line breaks. Auto-fit fits the box.</div>
           </div>
 
           <div class="grid2">
@@ -185,8 +179,8 @@
             <div class="row">
               <label>Auto-fit</label>
               <select id="propAutoFit">
-                <option value="yes" selected>Yes (fit box)</option>
-                <option value="no">No (use size)</option>
+                <option value="yes" selected>Yes</option>
+                <option value="no">No</option>
               </select>
             </div>
             <div class="row">
@@ -315,16 +309,6 @@
               <span id="propBoxOpacityVal" class="mono">0.35</span>
             </div>
           </div>
-
-          <hr class="sep" />
-
-          <div class="row">
-            <label>Quick Actions</label>
-            <div class="grid2">
-              <button id="btnSnapSafe" class="btn">Snap to Safe Area</button>
-              <button id="btnAutoContrast" class="btn">Auto Contrast</button>
-            </div>
-          </div>
         </div>
 
         <!-- IMAGE PROPS -->
@@ -335,9 +319,8 @@
           </div>
 
           <div class="row">
-            <label>Upload Logo/Image (PNG recommended)</label>
+            <label>Upload Logo/Image</label>
             <input id="imgPropFile" type="file" accept="image/*" />
-            <div class="hint">Tip: transparent PNG logos look best.</div>
           </div>
 
           <div class="grid2">
@@ -365,8 +348,6 @@
               <option value="yes">Yes</option>
             </select>
           </div>
-
-          <div class="hint">Drag to position anywhere • Use handles to resize.</div>
         </div>
       </section>
     </aside>

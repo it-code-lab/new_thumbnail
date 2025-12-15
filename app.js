@@ -1,7 +1,7 @@
-/* Thumbnail & Pinterest Post Maker (v2.1)
- * Enhancements:
- * 1) Image/Logo layers (upload PNG, drag/resize anywhere)
- * 2) Smart Modern Hook Presets: generate 10 hooks + styles from title
+/* FINAL: Thumbnail & Pinterest Post Maker (BG Crop Mode)
+ * - Background Crop box with drag + resize handles (aspect locked to canvas format)
+ * - Text/Image layers drag+resize
+ * - Export downloads canvas (bg + overlays) at target size
  */
 
 const $ = (id) => document.getElementById(id);
@@ -17,19 +17,27 @@ const formats = {
 
 const state = {
   formatKey: "youtube_16_9",
-  bgFit: "cover",
+  bgMode: "crop", // crop | cover | contain | contain_blur
   bgDim: 0.15,
   bgImage: null,
   bgImageSrc: "",
+
+  // Crop rectangle in SOURCE IMAGE pixel coordinates (sx,sy,sw,sh)
+  bgCrop: null, // { sx, sy, sw, sh }
+  showCropOverlay: true, // NEW: toggle crop UI visibility
+
   layers: [],
   selectedLayerId: null,
-  dragging: null,
+
+  dragging: null, // for layer move/resize
+  bgDragging: null, // for background crop move/resize
   dpiScale: 1,
+
 };
 
-// ---------- Utils ----------
 function uid() { return Math.random().toString(16).slice(2) + Date.now().toString(16); }
 function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
 function rgbaFromHex(hex, alpha=1){
   const h = hex.replace("#","").trim();
   const full = h.length === 3 ? h.split("").map(c=>c+c).join("") : h;
@@ -38,6 +46,7 @@ function rgbaFromHex(hex, alpha=1){
   const b = parseInt(full.slice(4,6),16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
 function setStatus(msg){ $("statusPill").textContent = msg; }
 
 function pxBoxFromPct(boxPct){
@@ -58,7 +67,24 @@ async function loadImageFromBlob(blob){
   });
 }
 
-// ---------- Layer Factories ----------
+function getCanvasWH(){
+  const f = formats[state.formatKey];
+  return { W: f.w, H: f.h };
+}
+
+function getBgWH(){
+  if (!state.bgImage) return { iw: 0, ih: 0 };
+  const iw = state.bgImage.naturalWidth || state.bgImage.width;
+  const ih = state.bgImage.naturalHeight || state.bgImage.height;
+  return { iw, ih };
+}
+
+function getCanvasAspect(){
+  const { W, H } = getCanvasWH();
+  return W / H;
+}
+
+// -------------------- Layers --------------------
 function makeTextLayer({ name="Text", text="YOUR HOOK", box=null } = {}){
   return {
     id: uid(),
@@ -103,106 +129,102 @@ function makeImageLayer({ name="Logo", box=null } = {}){
     name,
     visible: true,
     box: box ?? { x: 0.78, y: 0.78, w: 0.18, h: 0.18 },
-    img: null,          // HTMLImageElement
-    imgSrc: "",         // object URL
-    fit: "contain",     // contain | cover
+    img: null,
+    imgSrc: "",
+    fit: "contain",
     opacity: 1.0,
     shadow: false,
   };
 }
 
-// ---------- Project ----------
+// -------------------- Canvas sizing --------------------
 function applyCanvasFormat(){
   const f = formats[state.formatKey];
-
-  // internal pixel resolution (export quality)
   canvas.width  = f.w * state.dpiScale;
   canvas.height = f.h * state.dpiScale;
 
-  // IMPORTANT: do NOT force fixed CSS pixel size
-  // Let CSS scale it responsively without distortion
+  // Let CSS handle scaling (prevents "squeezing" on screen)
   canvas.style.width = "100%";
   canvas.style.height = "auto";
 
   ctx.setTransform(state.dpiScale,0,0,state.dpiScale,0,0);
 }
 
+// -------------------- Background crop init --------------------
+// Create a centered crop box that matches canvas aspect ratio.
+function initCenteredBgCrop(){
+  if (!state.bgImage) { state.bgCrop = null; return; }
+  const { iw, ih } = getBgWH();
+  const ar = getCanvasAspect();
 
-function resetProject(){
-  state.bgImage = null;
-  state.bgImageSrc = "";
-  state.layers = [
-    makeTextLayer({ name: "Hook", text: "STOP DOING THIS", box: { x: 0.07, y: 0.12, w: 0.62, h: 0.32 } }),
-    makeTextLayer({ name: "Badge", text: "NEW", box: { x: 0.73, y: 0.10, w: 0.22, h: 0.16 } }),
-  ];
+  // Start with the largest crop that fits inside the image with the same aspect ratio.
+  let sw = iw;
+  let sh = sw / ar;
+  if (sh > ih){
+    sh = ih;
+    sw = sh * ar;
+  }
 
-  // Badge styling
-  const badge = state.layers[1];
-  badge.style.fontFamily = "Anton";
-  badge.style.fontSize = 90;
-  badge.style.autoFit = true;
-  badge.style.fill = "#ffffff";
-  badge.style.strokeOn = false;
-  badge.style.shadowOn = true;
-  badge.style.boxOn = true;
-  badge.style.boxColor = "#ff0000";
-  badge.style.boxOpacity = 0.85;
-  badge.style.boxRadius = 28;
-  badge.style.boxPad = 14;
+  const sx = (iw - sw) / 2;
+  const sy = (ih - sh) / 2;
 
-  state.selectedLayerId = state.layers[0].id;
-  applyCanvasFormat();
-  render();
-  refreshLayersUI();
-  refreshPropsUI();
-  setStatus("New project created");
+  state.bgCrop = { sx, sy, sw, sh };
 }
 
-// ---------- Background ----------
+// Reset crop to centered fit
+function resetBgCrop(){
+  initCenteredBgCrop();
+  render();
+  setStatus("Background crop reset");
+}
+
+// -------------------- Background rendering --------------------
 function drawBackground(){
-  const { w, h } = formats[state.formatKey];
-  ctx.clearRect(0,0,w,h);
+  const { W, H } = getCanvasWH();
+  ctx.clearRect(0,0,W,H);
   ctx.fillStyle = "#0a1020";
-  ctx.fillRect(0,0,w,h);
+  ctx.fillRect(0,0,W,H);
 
   if (!state.bgImage) return;
 
   const img = state.bgImage;
-  const iw = img.naturalWidth || img.width;
-  const ih = img.naturalHeight || img.height;
+  const { iw, ih } = getBgWH();
 
-  if (state.bgFit === "cover"){
-    const scale = Math.max(w/iw, h/ih);
+  if (state.bgMode === "crop" && state.bgCrop){
+    const { sx, sy, sw, sh } = state.bgCrop;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+  } else if (state.bgMode === "cover"){
+    const scale = Math.max(W/iw, H/ih);
     const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, (w-dw)/2, (h-dh)/2, dw, dh);
-  } else if (state.bgFit === "contain"){
-    const scale = Math.min(w/iw, h/ih);
+    ctx.drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
+  } else if (state.bgMode === "contain"){
+    const scale = Math.min(W/iw, H/ih);
     const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, (w-dw)/2, (h-dh)/2, dw, dh);
+    ctx.drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
   } else { // contain_blur
     ctx.save();
     ctx.filter = "blur(22px) saturate(1.05)";
-    const scaleC = Math.max(w/iw, h/ih);
+    const scaleC = Math.max(W/iw, H/ih);
     const dwC = iw * scaleC, dhC = ih * scaleC;
-    ctx.drawImage(img, (w-dwC)/2, (h-dhC)/2, dwC, dhC);
+    ctx.drawImage(img, (W-dwC)/2, (H-dhC)/2, dwC, dhC);
     ctx.restore();
 
-    const scale = Math.min(w/iw, h/ih);
+    const scale = Math.min(W/iw, H/ih);
     const dw = iw * scale, dh = ih * scale;
-    ctx.drawImage(img, (w-dw)/2, (h-dh)/2, dw, dh);
+    ctx.drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
   }
 
   if (state.bgDim > 0){
-    const g = ctx.createLinearGradient(0,0,0,h);
+    const g = ctx.createLinearGradient(0,0,0,H);
     g.addColorStop(0, `rgba(0,0,0,${state.bgDim*0.7})`);
     g.addColorStop(0.55, `rgba(0,0,0,${state.bgDim})`);
     g.addColorStop(1, `rgba(0,0,0,${state.bgDim*0.85})`);
     ctx.fillStyle = g;
-    ctx.fillRect(0,0,w,h);
+    ctx.fillRect(0,0,W,H);
   }
 }
 
-// ---------- Text Rendering ----------
+// -------------------- Text rendering --------------------
 function buildFont(style, sizePx){
   const weight = style.fontWeight ?? 800;
   const family = style.fontFamily ?? "Inter";
@@ -329,7 +351,7 @@ function drawTextLayer(layer){
   ctx.restore();
 }
 
-// ---------- Image Rendering ----------
+// -------------------- Image layer rendering --------------------
 function drawImageLayer(layer){
   if (!layer.visible) return;
   const box = pxBoxFromPct(layer.box);
@@ -342,15 +364,9 @@ function drawImageLayer(layer){
     ctx.shadowBlur = 18;
     ctx.shadowOffsetX = 6;
     ctx.shadowOffsetY = 6;
-  } else {
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
   }
 
   if (!layer.img){
-    // placeholder
     ctx.fillStyle = "rgba(255,255,255,0.10)";
     drawRoundedRect(box.x, box.y, box.w, box.h, 18);
     ctx.fill();
@@ -374,7 +390,7 @@ function drawImageLayer(layer){
     const scale = Math.max(box.w/iw, box.h/ih);
     const dw = iw * scale, dh = ih * scale;
     ctx.drawImage(img, box.x + (box.w - dw)/2, box.y + (box.h - dh)/2, dw, dh);
-  } else { // contain
+  } else {
     const scale = Math.min(box.w/iw, box.h/ih);
     const dw = iw * scale, dh = ih * scale;
     ctx.drawImage(img, box.x + (box.w - dw)/2, box.y + (box.h - dh)/2, dw, dh);
@@ -383,7 +399,7 @@ function drawImageLayer(layer){
   ctx.restore();
 }
 
-// ---------- Selection / Handles ----------
+// -------------------- Handles (used for layers + crop) --------------------
 function getHandles(box){
   const s = 10;
   const hs = [
@@ -409,48 +425,151 @@ function hitTestBox(mx,my, box){
   return (mx >= box.x && mx <= box.x+box.w && my >= box.y && my <= box.y+box.h);
 }
 
-function drawSelection(){
-  const layer = selectedLayer();
-  if (!layer || !layer.visible) return;
+// -------------------- Background Crop Overlay (on canvas) --------------------
+// We draw crop rectangle in CANVAS space for user interaction
+function getBgCropCanvasRect(){
+  const { W, H } = getCanvasWH();
+  if (!state.bgImage || !state.bgCrop) return null;
 
-  const box = pxBoxFromPct(layer.box);
+  // map source crop -> canvas (we show it as full canvas area, since it becomes the canvas)
+  // For editing, we display a "crop frame" as if user is selecting which part of bg will be used.
+  // We'll treat this as a virtual rectangle in canvas space that user manipulates,
+  // then convert it back to source crop using the image "view" representation.
+
+  // For simplicity and correctness, we edit crop in SOURCE coords but interact in CANVAS space:
+  // We'll maintain an "editor view" where the full image is fitted to canvas (contain),
+  // then the crop rect is drawn on top of that fitted image.
+  const img = state.bgImage;
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+
+  // Fit full image into canvas (contain) for crop editor overlay
+  const scale = Math.min(W/iw, H/ih);
+  const dw = iw * scale, dh = ih * scale;
+  const ox = (W - dw) / 2;
+  const oy = (H - dh) / 2;
+
+  // crop rect in source -> canvas
+  const c = state.bgCrop;
+  const x = ox + c.sx * scale;
+  const y = oy + c.sy * scale;
+  const w = c.sw * scale;
+  const h = c.sh * scale;
+
+  return { x, y, w, h, scale, ox, oy, dw, dh, iw, ih };
+}
+
+function drawBgCropOverlay(){
+  if (!state.bgImage || !state.bgCrop || state.bgMode !== "crop") return;
+
+  const { W, H } = getCanvasWH();
+  const r = getBgCropCanvasRect();
+  if (!r) return;
+
   ctx.save();
 
-  // safe area
-  const safe = formats[state.formatKey].safe;
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4,6]);
-  ctx.strokeRect(safe.x*formats[state.formatKey].w, safe.y*formats[state.formatKey].h,
-                 safe.w*formats[state.formatKey].w, safe.h*formats[state.formatKey].h);
-  ctx.setLineDash([]);
+  // darken outside crop
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(0,0,W,H);
 
-  // selection box
-  ctx.strokeStyle = "rgba(90,167,255,0.95)";
+  // clear inside crop area
+  ctx.clearRect(r.x, r.y, r.w, r.h);
+
+  // draw border
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.setLineDash([6,4]);
-  ctx.strokeRect(box.x, box.y, box.w, box.h);
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
   ctx.setLineDash([]);
 
   // handles
-  ctx.fillStyle = "rgba(90,167,255,1)";
-  for (const h of getHandles(box)) ctx.fillRect(h.x, h.y, h.w, h.h);
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  for (const h of getHandles({x:r.x,y:r.y,w:r.w,h:r.h})) ctx.fillRect(h.x, h.y, h.w, h.h);
+
+  // info
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = `700 14px "Inter"`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("Background Crop (drag/resize)", r.x + 8, r.y - 6);
 
   ctx.restore();
 }
 
-// ---------- Render ----------
-function render(){
-  drawBackground();
-  for (const layer of state.layers){
-    if (!layer.visible) continue;
-    if (layer.type === "image") drawImageLayer(layer);
-    if (layer.type === "text") drawTextLayer(layer);
-  }
-  drawSelection();
+// Convert crop editor move/resize in CANVAS space back into SOURCE crop
+function setBgCropFromCanvasRect(newRectCanvas){
+  const r = getBgCropCanvasRect();
+  if (!r) return;
+
+  // Clamp crop rect to the displayed image bounds (ox..ox+dw, oy..oy+dh)
+  const minSizePx = 40;
+  let x = clamp(newRectCanvas.x, r.ox, r.ox + r.dw - minSizePx);
+  let y = clamp(newRectCanvas.y, r.oy, r.oy + r.dh - minSizePx);
+  let w = clamp(newRectCanvas.w, minSizePx, (r.ox + r.dw) - x);
+  let h = clamp(newRectCanvas.h, minSizePx, (r.oy + r.dh) - y);
+
+  // Convert to source
+  const sx = (x - r.ox) / r.scale;
+  const sy = (y - r.oy) / r.scale;
+  const sw = w / r.scale;
+  const sh = h / r.scale;
+
+  state.bgCrop = { sx, sy, sw, sh };
 }
 
-// ---------- UI (Layers) ----------
+// Aspect-locked resize for crop box (matches output format)
+function resizeBgCropAspectLocked(startRect, handle, dx, dy){
+  const ar = getCanvasAspect();
+  let { x, y, w, h } = startRect;
+
+  // We'll resize based on the handle, keeping aspect ratio w/h = ar.
+  // Use dx/dy, choose primary direction by magnitude.
+  const primary = Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
+
+  const applyWH = (newW, newH, anchorX, anchorY) => {
+    // anchorX/anchorY indicates which corner stays fixed
+    // anchorX: 0 left, 1 right ; anchorY: 0 top, 1 bottom
+    const nx = anchorX === 0 ? x : (x + w - newW);
+    const ny = anchorY === 0 ? y : (y + h - newH);
+    return { x: nx, y: ny, w: newW, h: newH };
+  };
+
+  // Default anchors per handle
+  let ax = 0, ay = 0;
+  if (handle.includes("e")) ax = 0; else if (handle.includes("w")) ax = 1; else ax = 0;
+  if (handle.includes("s")) ay = 0; else if (handle.includes("n")) ay = 1; else ay = 0;
+
+  // For side handles, set anchors accordingly
+  if (handle === "e") { ax = 0; ay = 0; }
+  if (handle === "w") { ax = 1; ay = 0; }
+  if (handle === "n") { ax = 0; ay = 1; }
+  if (handle === "s") { ax = 0; ay = 0; }
+
+  let newW = w;
+  let newH = h;
+
+  if (primary === "x"){
+    if (handle.includes("e")) newW = w + dx;
+    else if (handle.includes("w")) newW = w - dx;
+    else newW = w + dx; // corner
+    newW = Math.max(40, newW);
+    newH = newW / ar;
+  } else {
+    if (handle.includes("s")) newH = h + dy;
+    else if (handle.includes("n")) newH = h - dy;
+    else newH = h + dy; // corner
+    newH = Math.max(40, newH);
+    newW = newH * ar;
+  }
+
+  return applyWH(newW, newH, ax, ay);
+}
+
+// -------------------- Layer selection UI --------------------
+function selectedLayer(){
+  return state.layers.find(l => l.id === state.selectedLayerId) || null;
+}
+
 function refreshLayersUI(){
   const list = $("layersList");
   list.innerHTML = "";
@@ -499,23 +618,17 @@ function refreshLayersUI(){
   }
 }
 
-// ---------- UI (Props) ----------
-function selectedLayer(){
-  return state.layers.find(l => l.id === state.selectedLayerId) || null;
-}
-
+// -------------------- Props UI --------------------
 function showPropsNone(){
   $("noSelection").classList.remove("hidden");
   $("layerPropsText").classList.add("hidden");
   $("layerPropsImage").classList.add("hidden");
 }
-
 function showPropsText(){
   $("noSelection").classList.add("hidden");
   $("layerPropsText").classList.remove("hidden");
   $("layerPropsImage").classList.add("hidden");
 }
-
 function showPropsImage(){
   $("noSelection").classList.add("hidden");
   $("layerPropsText").classList.add("hidden");
@@ -617,81 +730,6 @@ function bindTextProps(){
     l.style.boxOpacity = clamp(parseFloat($("propBoxOpacity").value || "0.35"), 0, 1);
     $("propBoxOpacityVal").textContent = Number($("propBoxOpacity").value).toFixed(2);
   });
-
-  $("btnSnapSafe").addEventListener("click", () => {
-    const layer = selectedLayer();
-    if (!layer || layer.type !== "text") return;
-    const safe = formats[state.formatKey].safe;
-    layer.box.x = clamp(layer.box.x, safe.x, safe.x + safe.w - layer.box.w);
-    layer.box.y = clamp(layer.box.y, safe.y, safe.y + safe.h - layer.box.h);
-    render();
-  });
-
-  $("btnAutoContrast").addEventListener("click", () => {
-    const layer = selectedLayer();
-    if (!layer || layer.type !== "text" || !state.bgImage) return;
-    // quick luminance sample
-    const box = pxBoxFromPct(layer.box);
-    const { w, h } = formats[state.formatKey];
-
-    const tmp = document.createElement("canvas");
-    tmp.width = w; tmp.height = h;
-    const tctx = tmp.getContext("2d");
-
-    // draw background similarly
-    tctx.fillStyle = "#0a1020"; tctx.fillRect(0,0,w,h);
-    const img = state.bgImage;
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
-
-    const fit = state.bgFit;
-    if (fit === "cover"){
-      const scale = Math.max(w/iw, h/ih);
-      const dw = iw * scale, dh = ih * scale;
-      tctx.drawImage(img, (w-dw)/2, (h-dh)/2, dw, dh);
-    } else if (fit === "contain"){
-      const scale = Math.min(w/iw, h/ih);
-      const dw = iw * scale, dh = ih * scale;
-      tctx.drawImage(img, (w-dw)/2, (h-dh)/2, dw, dh);
-    } else {
-      tctx.save(); tctx.filter = "blur(22px) saturate(1.05)";
-      const scaleC = Math.max(w/iw, h/ih);
-      const dwC = iw * scaleC, dhC = ih * scaleC;
-      tctx.drawImage(img, (w-dwC)/2, (h-dhC)/2, dwC, dhC);
-      tctx.restore();
-
-      const scale = Math.min(w/iw, h/ih);
-      const dw = iw * scale, dh = ih * scale;
-      tctx.drawImage(img, (w-dw)/2, (h-dh)/2, dw, dh);
-    }
-
-    if (state.bgDim > 0){
-      const g = tctx.createLinearGradient(0,0,0,h);
-      g.addColorStop(0, `rgba(0,0,0,${state.bgDim*0.7})`);
-      g.addColorStop(0.55, `rgba(0,0,0,${state.bgDim})`);
-      g.addColorStop(1, `rgba(0,0,0,${state.bgDim*0.85})`);
-      tctx.fillStyle = g; tctx.fillRect(0,0,w,h);
-    }
-
-    const samples = [
-      {x: box.x + box.w*0.25, y: box.y + box.h*0.35},
-      {x: box.x + box.w*0.50, y: box.y + box.h*0.50},
-      {x: box.x + box.w*0.75, y: box.y + box.h*0.65},
-    ];
-
-    let sum = 0;
-    for (const p of samples){
-      const data = tctx.getImageData(clamp(Math.floor(p.x),0,w-1), clamp(Math.floor(p.y),0,h-1), 1,1).data;
-      const lum = 0.2126*data[0] + 0.7152*data[1] + 0.0722*data[2];
-      sum += lum;
-    }
-    const avg = sum / samples.length;
-
-    layer.style.fill = (avg > 145) ? "#000000" : "#ffffff";
-    layer.style.strokeColor = (avg > 145) ? "#ffffff" : "#000000";
-    refreshPropsUI();
-    render();
-  });
 }
 
 function bindImageProps(){
@@ -734,42 +772,134 @@ function bindImageProps(){
     layer.img = img;
     layer.imgSrc = img.src;
     render();
-    setStatus("Logo/Image loaded into layer");
+    setStatus("Logo/Image loaded");
   });
 }
 
-// ---------- Mouse (drag/resize both text & image) ----------
+// -------------------- Render selection for layers --------------------
+function drawLayerSelection(){
+  const layer = selectedLayer();
+  if (!layer || !layer.visible) return;
+
+  const box = pxBoxFromPct(layer.box);
+  const { w, h, safe } = formats[state.formatKey];
+
+  ctx.save();
+
+  // safe area
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4,6]);
+  ctx.strokeRect(safe.x*w, safe.y*h, safe.w*w, safe.h*h);
+  ctx.setLineDash([]);
+
+  // selection box
+  ctx.strokeStyle = "rgba(90,167,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6,4]);
+  ctx.strokeRect(box.x, box.y, box.w, box.h);
+  ctx.setLineDash([]);
+
+  // handles
+  ctx.fillStyle = "rgba(90,167,255,1)";
+  for (const hnd of getHandles(box)) ctx.fillRect(hnd.x, hnd.y, hnd.w, hnd.h);
+
+  ctx.restore();
+}
+
+// -------------------- Full render --------------------
+function render({ forExport = false } = {}){
+  drawBackground();
+
+  // Show crop overlay only while editing (never in export)
+  if (
+    !forExport &&
+    state.bgMode === "crop" &&
+    state.showCropOverlay
+  ) {
+    drawBgCropOverlay();
+  }
+
+
+  // draw layers
+  for (const layer of state.layers){
+    if (!layer.visible) continue;
+    if (layer.type === "image") drawImageLayer(layer);
+    if (layer.type === "text") drawTextLayer(layer);
+  }
+
+  // Show selection box only while editing (never in export)
+  if (!forExport && !(state.bgMode === "crop" && state.bgDragging)) {
+    drawLayerSelection();
+  }
+}
+
+
+// -------------------- Mouse mapping --------------------
 function getMousePos(evt){
   const rect = canvas.getBoundingClientRect();
-  const x = (evt.clientX - rect.left) * (formats[state.formatKey].w / rect.width);
-  const y = (evt.clientY - rect.top) * (formats[state.formatKey].h / rect.height);
+  const { W, H } = getCanvasWH();
+  const x = (evt.clientX - rect.left) * (W / rect.width);
+  const y = (evt.clientY - rect.top) * (H / rect.height);
   return { x, y };
+}
+
+// -------------------- Background crop interaction --------------------
+function bgCropHitTest(mx,my){
+  if (state.bgMode !== "crop") return null;
+  const r = getBgCropCanvasRect();
+  if (!r) return null;
+
+  const box = { x: r.x, y: r.y, w: r.w, h: r.h };
+  const hnd = hitTestHandle(mx,my,box);
+  if (hnd) return { type:"handle", handle: hnd, box };
+  if (hitTestBox(mx,my,box)) return { type:"box", box };
+  return null;
+}
+
+// -------------------- Layer interaction --------------------
+function layerHitTestSelect(mx,my){
+  // select topmost layer under cursor
+  for (let i=state.layers.length-1; i>=0; i--){
+    const L = state.layers[i];
+    if (!L.visible) continue;
+    const b = pxBoxFromPct(L.box);
+    if (hitTestBox(mx,my,b)) return L;
+  }
+  return null;
 }
 
 canvas.addEventListener("mousedown", (e) => {
   const { x:mx, y:my } = getMousePos(e);
 
-  // select topmost layer under cursor if click outside selected
-  const selected = selectedLayer();
-  if (!selected || !hitTestBox(mx, my, pxBoxFromPct(selected.box))){
-    for (let i=state.layers.length-1; i>=0; i--){
-      const L = state.layers[i];
-      if (!L.visible) continue;
-      const b = pxBoxFromPct(L.box);
-      if (hitTestBox(mx,my,b)){
-        state.selectedLayerId = L.id;
-        refreshLayersUI();
-        refreshPropsUI();
-        render();
-        break;
-      }
-    }
+  // 1) If in crop mode and user clicks crop box/handle -> start bg crop drag
+  const bgHit = bgCropHitTest(mx,my);
+  if (bgHit){
+    const r = getBgCropCanvasRect();
+    state.bgDragging = {
+      mode: bgHit.type === "handle" ? "resize" : "move",
+      handle: bgHit.handle || null,
+      startX: mx,
+      startY: my,
+      startRect: { x: r.x, y: r.y, w: r.w, h: r.h },
+    };
+    render();
+    return;
+  }
+
+  // 2) Otherwise handle layers
+  // Select if clicking a different layer
+  const top = layerHitTestSelect(mx,my);
+  if (top && top.id !== state.selectedLayerId){
+    state.selectedLayerId = top.id;
+    refreshLayersUI();
+    refreshPropsUI();
   }
 
   const layer = selectedLayer();
   if (!layer) return;
-  const box = pxBoxFromPct(layer.box);
 
+  const box = pxBoxFromPct(layer.box);
   const handle = hitTestHandle(mx,my,box);
   if (handle){
     state.dragging = { id: layer.id, mode:"resize", handle, startX: mx, startY: my, startBox: { ...box } };
@@ -782,15 +912,37 @@ canvas.addEventListener("mousedown", (e) => {
 });
 
 window.addEventListener("mousemove", (e) => {
+  const { x:mx, y:my } = getMousePos(e);
+
+  // Background crop drag
+  if (state.bgDragging){
+    const dx = mx - state.bgDragging.startX;
+    const dy = my - state.bgDragging.startY;
+
+    let rect = { ...state.bgDragging.startRect };
+
+    if (state.bgDragging.mode === "move"){
+      rect.x += dx;
+      rect.y += dy;
+    } else {
+      rect = resizeBgCropAspectLocked(rect, state.bgDragging.handle, dx, dy);
+    }
+
+    // Apply back to source crop (clamps inside image bounds)
+    setBgCropFromCanvasRect(rect);
+    render();
+    return;
+  }
+
+  // Layer drag
   if (!state.dragging) return;
   const layer = state.layers.find(l => l.id === state.dragging.id);
   if (!layer) return;
 
-  const { x:mx, y:my } = getMousePos(e);
   const dx = mx - state.dragging.startX;
   const dy = my - state.dragging.startY;
 
-  const { w:W, h:H } = formats[state.formatKey];
+  const { W, H } = getCanvasWH();
   const minSize = 30;
 
   let box = { ...state.dragging.startBox };
@@ -805,7 +957,7 @@ window.addEventListener("mousemove", (e) => {
     box.x = clamp(box.x, 0, W - box.w);
     box.y = clamp(box.y, 0, H - box.h);
   } else {
-    const h = state.dragging.handle;
+    const hnd = state.dragging.handle;
     const apply = (left, top, right, bottom) => {
       if (left){
         const nx = clamp(box.x + dx, 0, box.x + box.w - minSize);
@@ -818,14 +970,14 @@ window.addEventListener("mousemove", (e) => {
       }
       if (bottom) box.h = clamp(box.h + dy, minSize, H - box.y);
     };
-    if (h==="nw") apply(true,true,false,false);
-    if (h==="n")  apply(false,true,false,false);
-    if (h==="ne") apply(false,true,true,false);
-    if (h==="e")  apply(false,false,true,false);
-    if (h==="se") apply(false,false,true,true);
-    if (h==="s")  apply(false,false,false,true);
-    if (h==="sw") apply(true,false,false,true);
-    if (h==="w")  apply(true,false,false,false);
+    if (hnd==="nw") apply(true,true,false,false);
+    if (hnd==="n")  apply(false,true,false,false);
+    if (hnd==="ne") apply(false,true,true,false);
+    if (hnd==="e")  apply(false,false,true,false);
+    if (hnd==="se") apply(false,false,true,true);
+    if (hnd==="s")  apply(false,false,false,true);
+    if (hnd==="sw") apply(true,false,false,true);
+    if (hnd==="w")  apply(true,false,false,false);
 
     box.x = clamp(box.x, 0, W - minSize);
     box.y = clamp(box.y, 0, H - minSize);
@@ -837,17 +989,26 @@ window.addEventListener("mousemove", (e) => {
   render();
 });
 
-window.addEventListener("mouseup", () => { state.dragging = null; });
+window.addEventListener("mouseup", () => {
+  if (state.bgDragging){
+    state.bgDragging = null;
+    setStatus("Background crop updated");
+    render();
+  }
+  state.dragging = null;
+});
 
-// ---------- Background Load (file + paste) ----------
+// -------------------- Background load (file + paste) --------------------
 $("imageInput").addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
   const img = await loadImageFromBlob(file);
   state.bgImage = img;
   state.bgImageSrc = img.src;
+
+  initCenteredBgCrop();
   render();
-  setStatus("Background loaded");
+  setStatus("Background loaded (crop ready)");
 });
 
 window.addEventListener("paste", async (e) => {
@@ -859,22 +1020,40 @@ window.addEventListener("paste", async (e) => {
       const img = await loadImageFromBlob(blob);
       state.bgImage = img;
       state.bgImageSrc = img.src;
+
+      initCenteredBgCrop();
       render();
-      setStatus("Pasted background image");
+      setStatus("Pasted background (crop ready)");
       return;
     }
   }
 });
 
-// ---------- Project Controls ----------
+// -------------------- Project controls --------------------
 $("formatSelect").addEventListener("change", () => {
   state.formatKey = $("formatSelect").value;
   applyCanvasFormat();
+
+  // Keep crop aspect locked to new format: re-center crop (best UX)
+  if (state.bgImage){
+    initCenteredBgCrop();
+  }
+
   render();
   setStatus("Format changed");
 });
 
-$("bgFitSelect").addEventListener("change", () => { state.bgFit = $("bgFitSelect").value; render(); });
+$("bgModeSelect").addEventListener("change", () => {
+  state.bgMode = $("bgModeSelect").value;
+
+  // Ensure crop exists if user switches to crop
+  if (state.bgMode === "crop" && state.bgImage && !state.bgCrop){
+    initCenteredBgCrop();
+  }
+
+  render();
+  setStatus(`Background mode: ${state.bgMode}`);
+});
 
 $("bgDim").addEventListener("input", () => {
   state.bgDim = parseFloat($("bgDim").value);
@@ -882,13 +1061,37 @@ $("bgDim").addEventListener("input", () => {
   render();
 });
 
+$("btnCenterCrop").addEventListener("click", () => {
+  if (!state.bgImage) return;
+  initCenteredBgCrop();
+  render();
+  setStatus("Centered background crop");
+});
+$("btnResetCrop").addEventListener("click", () => {
+  if (!state.bgImage) return;
+  resetBgCrop();
+});
+
+$("btnToggleCropOverlay").addEventListener("click", () => {
+  state.showCropOverlay = !state.showCropOverlay;
+
+  $("btnToggleCropOverlay").textContent =
+    state.showCropOverlay ? "Hide Crop Overlay" : "Show Crop Overlay";
+
+  render();
+});
+
 $("jpgQuality").addEventListener("input", () => {
   $("jpgQualityVal").textContent = Number($("jpgQuality").value).toFixed(2);
 });
 
-// ---------- Layer Buttons ----------
+// -------------------- Layer buttons --------------------
 $("btnAddTextLayer").addEventListener("click", () => {
-  const l = makeTextLayer({ name: `Text ${state.layers.length+1}`, text: "TYPE HERE", box: { x: 0.12, y: 0.45, w: 0.76, h: 0.20 } });
+  const l = makeTextLayer({
+    name: `Text ${state.layers.length+1}`,
+    text: "TYPE HERE",
+    box: { x: 0.12, y: 0.45, w: 0.76, h: 0.20 }
+  });
   l.style.fontFamily = "Montserrat";
   l.style.fontWeight = 900;
   l.style.fontSize = 90;
@@ -900,13 +1103,13 @@ $("btnAddTextLayer").addEventListener("click", () => {
 });
 
 $("btnAddImageLayer").addEventListener("click", () => {
-  const l = makeImageLayer({ name: `Logo ${state.layers.length+1}`, box: { x: 0.78, y: 0.78, w: 0.18, h: 0.18 } });
+  const l = makeImageLayer({ name: `Logo ${state.layers.length+1}` });
   state.layers.push(l);
   state.selectedLayerId = l.id;
   refreshLayersUI();
   refreshPropsUI();
   render();
-  setStatus("Added Image/Logo layer (upload in right panel)");
+  setStatus("Added Image/Logo layer (upload on right)");
 });
 
 $("btnDeleteLayer").addEventListener("click", () => {
@@ -929,7 +1132,6 @@ $("btnDuplicateLayer").addEventListener("click", () => {
   copy.name = (layer.name || "Layer") + " copy";
   copy.box = { ...layer.box, x: clamp(layer.box.x + 0.02, 0, 0.98), y: clamp(layer.box.y + 0.02, 0, 0.98) };
 
-  // Image layers need special handling (cannot JSON-clone HTMLImageElement)
   if (layer.type === "image"){
     copy.img = layer.img || null;
     copy.imgSrc = layer.imgSrc || "";
@@ -959,98 +1161,14 @@ $("btnSendBackward").addEventListener("click", () => {
   refreshLayersUI(); render();
 });
 
-$("btnNew").addEventListener("click", resetProject);
-
-// ---------- Templates ----------
-function clearLayersKeepBG(){ state.layers = []; state.selectedLayerId = null; }
-
-$("tplYouTubeHook").addEventListener("click", () => {
-  state.formatKey = "youtube_16_9";
-  $("formatSelect").value = state.formatKey;
-  applyCanvasFormat();
-
-  clearLayersKeepBG();
-  const hook = makeTextLayer({ name:"Hook", text:"3 MISTAKES\nYOU MUST AVOID", box:{x:0.06,y:0.14,w:0.62,h:0.40} });
-  hook.style.fontFamily = "Bebas Neue"; hook.style.fontWeight = 900; hook.style.fontSize = 130;
-  hook.style.strokeOn = true; hook.style.strokeWidth = 16; hook.style.shadowOn = true;
-
-  const badge = makeTextLayer({ name:"Badge", text:"WATCH", box:{x:0.72,y:0.12,w:0.24,h:0.18} });
-  badge.style.fontFamily = "Anton";
-  badge.style.autoFit = true; badge.style.strokeOn = false;
-  badge.style.boxOn = true; badge.style.boxColor = "#ff2d2d"; badge.style.boxOpacity = 0.88; badge.style.boxRadius = 26;
-
-  state.layers.push(hook, badge);
-  state.selectedLayerId = hook.id;
-  refreshLayersUI(); refreshPropsUI(); render();
-});
-
-$("tplYouTubeCenter").addEventListener("click", () => {
-  state.formatKey = "youtube_16_9";
-  $("formatSelect").value = state.formatKey;
-  applyCanvasFormat();
-
-  clearLayersKeepBG();
-  const main = makeTextLayer({ name:"Center Hook", text:"THIS CHANGES\nEVERYTHING", box:{x:0.10,y:0.22,w:0.80,h:0.42} });
-  main.style.fontFamily = "Anton";
-  main.style.fontSize = 160;
-  main.style.strokeOn = true; main.style.strokeWidth = 18; main.style.shadowOn = true;
-  main.style.align = "center";
-
-  state.layers.push(main);
-  state.selectedLayerId = main.id;
-  refreshLayersUI(); refreshPropsUI(); render();
-});
-
-$("tplPinterestTitle").addEventListener("click", () => {
-  state.formatKey = "pinterest_2_3";
-  $("formatSelect").value = state.formatKey;
-  applyCanvasFormat();
-
-  clearLayersKeepBG();
-  const title = makeTextLayer({ name:"Title", text:"SOCIAL MEDIA\nCONTENT IDEAS", box:{x:0.07,y:0.08,w:0.86,h:0.22} });
-  title.style.fontFamily = "Montserrat"; title.style.fontWeight = 900; title.style.fontSize = 110;
-  title.style.strokeOn = true; title.style.strokeWidth = 12; title.style.shadowOn = true;
-
-  const bullets = makeTextLayer({ name:"Bullets", text:"• 30-day plan\n• Hooks + CTAs\n• Templates included", box:{x:0.10,y:0.34,w:0.80,h:0.30} });
-  bullets.style.fontFamily = "Inter"; bullets.style.fontWeight = 800; bullets.style.fontSize = 66;
-  bullets.style.strokeOn = true; bullets.style.strokeWidth = 10; bullets.style.align = "left";
-  bullets.style.uppercase = false;
-  bullets.style.boxOn = true; bullets.style.boxColor = "#000000"; bullets.style.boxOpacity = 0.35; bullets.style.boxRadius = 26;
-
-  const footer = makeTextLayer({ name:"Footer", text:"Read more at: yoursite.com", box:{x:0.10,y:0.86,w:0.80,h:0.10} });
-  footer.style.fontFamily = "Inter"; footer.style.fontWeight = 700; footer.style.fontSize = 40;
-  footer.style.strokeOn = false; footer.style.shadowOn = false;
-  footer.style.boxOn = true; footer.style.boxColor = "#000000"; footer.style.boxOpacity = 0.45; footer.style.boxRadius = 22;
-  footer.style.uppercase = false;
-
-  state.layers.push(title, bullets, footer);
-  state.selectedLayerId = title.id;
-  refreshLayersUI(); refreshPropsUI(); render();
-});
-
-$("tplStoryPunchy").addEventListener("click", () => {
-  state.formatKey = "story_9_16";
-  $("formatSelect").value = state.formatKey;
-  applyCanvasFormat();
-
-  clearLayersKeepBG();
-  const top = makeTextLayer({ name:"Title", text:"ONE TRICK\nTO BOOST VIEWS", box:{x:0.08,y:0.12,w:0.84,h:0.26} });
-  top.style.fontFamily = "Anton"; top.style.fontSize = 140;
-  top.style.strokeOn = true; top.style.strokeWidth = 14;
-
-  const badge = makeTextLayer({ name:"Badge", text:"SAVE THIS", box:{x:0.24,y:0.72,w:0.52,h:0.12} });
-  badge.style.fontFamily = "Montserrat"; badge.style.fontWeight = 900; badge.style.fontSize = 72;
-  badge.style.strokeOn = false;
-  badge.style.boxOn = true; badge.style.boxColor = "#5aa7ff"; badge.style.boxOpacity = 0.85; badge.style.boxRadius = 28;
-
-  state.layers.push(top, badge);
-  state.selectedLayerId = top.id;
-  refreshLayersUI(); refreshPropsUI(); render();
-});
-
-// ---------- Export ----------
+// -------------------- Export --------------------
 $("btnExport").addEventListener("click", () => {
   const type = $("exportType").value;
+
+  // 1) render clean image (no crop overlay, no selection boxes)
+  render({ forExport: true });
+
+  // 2) export
   let dataUrl = "";
   if (type === "png"){
     dataUrl = canvas.toDataURL("image/png");
@@ -1058,305 +1176,64 @@ $("btnExport").addEventListener("click", () => {
     const q = clamp(parseFloat($("jpgQuality").value || "0.92"), 0.4, 1);
     dataUrl = canvas.toDataURL("image/jpeg", q);
   }
+
+  // 3) restore edit overlays after export
+  render({ forExport: false });
+
   const { w, h } = formats[state.formatKey];
   const ts = new Date().toISOString().replace(/[:.]/g,"-");
   const a = document.createElement("a");
   a.download = `design_${state.formatKey}_${w}x${h}_${ts}.${type}`;
   a.href = dataUrl;
   a.click();
-  setStatus(`Exported ${type.toUpperCase()}`);
+  setStatus(`Exported ${type.toUpperCase()} (${w}×${h})`);
 });
 
-// ---------- Smart Modern Hook Presets ----------
-const STOP_WORDS = new Set(["the","a","an","and","or","to","of","for","in","on","with","your","you","is","are","this","that","it","from","at","by","as","how","what","why","when","best","top"]);
 
-function extractKeywords(title){
-  const clean = (title || "")
-    .replace(/[^\w\s$%-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+// -------------------- New project --------------------
+function resetProject(){
+  state.bgImage = null;
+  state.bgImageSrc = "";
+  state.bgCrop = null;
 
-  const words = clean.split(" ").filter(Boolean);
-  const keywords = [];
-  for (const w of words){
-    const low = w.toLowerCase();
-    if (low.length <= 2) continue;
-    if (STOP_WORDS.has(low)) continue;
-    // keep numbers/$
-    keywords.push(w);
-  }
-  // prefer first few unique
-  const uniq = [];
-  for (const k of keywords){
-    const low = k.toLowerCase();
-    if (!uniq.some(u => u.toLowerCase() === low)) uniq.push(k);
-  }
-  return {
-    clean,
-    k1: uniq[0] || "THIS",
-    k2: uniq[1] || "TRICK",
-    k3: uniq[2] || "TODAY",
-    uniq
-  };
-}
-
-function modernStylePresets(){
-  // These are “pro thumbnail” style combos you can click-apply.
-  return [
-    {
-      label: "Bold Outline",
-      apply: (layer) => {
-        layer.style.fontFamily = "Anton";
-        layer.style.fontWeight = 900;
-        layer.style.fill = "#ffffff";
-        layer.style.strokeOn = true;
-        layer.style.strokeColor = "#000000";
-        layer.style.strokeWidth = 18;
-        layer.style.shadowOn = true;
-        layer.style.shadowBlur = 18;
-        layer.style.shadowDx = 6;
-        layer.style.shadowDy = 6;
-        layer.style.boxOn = false;
-        layer.style.uppercase = true;
-        layer.style.align = "center";
-        layer.style.autoFit = true;
-        layer.style.lineHeight = 1.0;
-      }
-    },
-    {
-      label: "Blue Pill",
-      apply: (layer) => {
-        layer.style.fontFamily = "Montserrat";
-        layer.style.fontWeight = 900;
-        layer.style.fill = "#ffffff";
-        layer.style.strokeOn = false;
-        layer.style.shadowOn = true;
-        layer.style.shadowBlur = 14;
-        layer.style.shadowDx = 4;
-        layer.style.shadowDy = 4;
-        layer.style.boxOn = true;
-        layer.style.boxColor = "#5aa7ff";
-        layer.style.boxOpacity = 0.88;
-        layer.style.boxRadius = 32;
-        layer.style.boxPad = 18;
-        layer.style.uppercase = true;
-        layer.style.align = "center";
-        layer.style.autoFit = true;
-        layer.style.lineHeight = 1.0;
-      }
-    },
-    {
-      label: "Dark Glass",
-      apply: (layer) => {
-        layer.style.fontFamily = "Inter";
-        layer.style.fontWeight = 900;
-        layer.style.fill = "#ffffff";
-        layer.style.strokeOn = true;
-        layer.style.strokeColor = "#000000";
-        layer.style.strokeWidth = 10;
-        layer.style.shadowOn = true;
-        layer.style.shadowBlur = 16;
-        layer.style.shadowDx = 5;
-        layer.style.shadowDy = 5;
-        layer.style.boxOn = true;
-        layer.style.boxColor = "#000000";
-        layer.style.boxOpacity = 0.35;
-        layer.style.boxRadius = 26;
-        layer.style.boxPad = 16;
-        layer.style.uppercase = true;
-        layer.style.align = "left";
-        layer.style.autoFit = true;
-        layer.style.lineHeight = 1.05;
-      }
-    },
-    {
-      label: "Clean Minimal",
-      apply: (layer) => {
-        layer.style.fontFamily = "Oswald";
-        layer.style.fontWeight = 700;
-        layer.style.fill = "#ffffff";
-        layer.style.strokeOn = false;
-        layer.style.shadowOn = true;
-        layer.style.shadowBlur = 12;
-        layer.style.shadowDx = 3;
-        layer.style.shadowDy = 3;
-        layer.style.boxOn = false;
-        layer.style.uppercase = true;
-        layer.style.align = "center";
-        layer.style.autoFit = true;
-        layer.style.lineHeight = 1.0;
-      }
-    },
-    {
-      label: "Red Alert",
-      apply: (layer) => {
-        layer.style.fontFamily = "Bebas Neue";
-        layer.style.fontWeight = 900;
-        layer.style.fill = "#ffffff";
-        layer.style.strokeOn = true;
-        layer.style.strokeColor = "#000000";
-        layer.style.strokeWidth = 16;
-        layer.style.shadowOn = true;
-        layer.style.shadowBlur = 18;
-        layer.style.shadowDx = 6;
-        layer.style.shadowDy = 6;
-        layer.style.boxOn = true;
-        layer.style.boxColor = "#ff2d2d";
-        layer.style.boxOpacity = 0.72;
-        layer.style.boxRadius = 22;
-        layer.style.boxPad = 14;
-        layer.style.uppercase = true;
-        layer.style.align = "center";
-        layer.style.autoFit = true;
-        layer.style.lineHeight = 1.0;
-      }
-    },
-  ];
-}
-
-function generateHooksFromTitle(title){
-  const k = extractKeywords(title);
-  const styles = modernStylePresets();
-
-  // “Modern hook” templates (short + punchy).
-  const templates = [
-    `STOP ${k.k1}`,
-    `${k.k1} CHANGES EVERYTHING`,
-    `DO THIS FOR ${k.k1}`,
-    `I WAS WRONG ABOUT ${k.k1}`,
-    `${k.k1} IN 5 MINUTES`,
-    `THE ${k.k1} TRICK NOBODY TELLS YOU`,
-    `3 ${k.k1} MISTAKES`,
-    `DON’T BUY ${k.k1} BEFORE THIS`,
-    `${k.k1}: WHAT NO ONE SAYS`,
-    `THE FASTEST WAY TO ${k.k1}`,
-    `THIS FIXED MY ${k.k1}`,
-    `${k.k1} VS ${k.k2}`,
-    `THE REAL COST OF ${k.k1}`,
-    `MAKE ${k.k1} LOOK EASY`,
+  state.layers = [
+    makeTextLayer({ name: "Hook", text: "CUTE FARM\nANIMALS", box: { x: 0.06, y: 0.10, w: 0.62, h: 0.30 } }),
+    makeTextLayer({ name: "Sub", text: "Coloring Book", box: { x: 0.06, y: 0.42, w: 0.55, h: 0.14 } }),
   ];
 
-  // Pick 10 (deterministic-ish but varied)
-  const picks = [];
-  for (let i=0;i<templates.length;i++){
-    if (picks.length >= 10) break;
-    const t = templates[i];
-    // avoid near-duplicates if k1 is small
-    if (picks.some(p => p.text === t)) continue;
-    picks.push({
-      text: t,
-      styleIndex: i % styles.length,
-      styleLabel: styles[i % styles.length].label,
-      subtitle: `Uses keyword: ${k.k1}${k.k2 ? ` • alt: ${k.k2}` : ""}`
-    });
-  }
-  return picks;
-}
+  state.layers[0].style.fontFamily = "Anton";
+  state.layers[0].style.fontSize = 150;
+  state.layers[0].style.strokeWidth = 16;
+  state.layers[0].style.align = "left";
 
-function renderHooksList(items){
-  const host = $("hooksList");
-  host.innerHTML = "";
-  if (!items || items.length === 0) return;
+  state.layers[1].style.fontFamily = "Bebas Neue";
+  state.layers[1].style.fontSize = 90;
+  state.layers[1].style.uppercase = false;
+  state.layers[1].style.strokeWidth = 10;
+  state.layers[1].style.align = "left";
 
-  items.forEach((it, idx) => {
-    const div = document.createElement("div");
-    div.className = "hook-item";
-
-    const top = document.createElement("div");
-    top.className = "hook-top";
-
-    const txt = document.createElement("div");
-    txt.className = "hook-text";
-    txt.textContent = it.text;
-
-    const sty = document.createElement("div");
-    sty.className = "hook-style";
-    sty.textContent = it.styleLabel;
-
-    top.appendChild(txt);
-    top.appendChild(sty);
-
-    const sub = document.createElement("div");
-    sub.className = "hook-sub";
-    sub.textContent = it.subtitle;
-
-    div.appendChild(top);
-    div.appendChild(sub);
-
-    div.addEventListener("click", () => applyHookPreset(it));
-    host.appendChild(div);
-  });
-}
-
-function applyHookPreset(hook){
-  const styles = modernStylePresets();
-
-  // choose target text layer:
-  let layer = selectedLayer();
-  if (!layer || layer.type !== "text"){
-    // try find a "Hook" text layer
-    layer = state.layers.find(l => l.type === "text" && (l.name || "").toLowerCase().includes("hook")) || null;
-  }
-  if (!layer){
-    // create new hook layer
-    layer = makeTextLayer({ name: "Hook", text: hook.text, box: { x: 0.07, y: 0.12, w: 0.70, h: 0.34 } });
-    state.layers.push(layer);
-  }
-
-  layer.text = hook.text;
-  layer.style.uppercase = true;
-  layer.style.autoFit = true;
-
-  // apply style preset
-  const preset = styles[hook.styleIndex] || styles[0];
-  preset.apply(layer);
-
-  // smart default placement per format
-  if (state.formatKey === "pinterest_2_3"){
-    layer.box = { x: 0.08, y: 0.08, w: 0.84, h: 0.22 };
-    layer.style.align = "center";
-    layer.style.lineHeight = 1.0;
-  } else if (state.formatKey === "story_9_16"){
-    layer.box = { x: 0.08, y: 0.12, w: 0.84, h: 0.24 };
-  } else {
-    layer.box = { x: 0.06, y: 0.14, w: 0.62, h: 0.38 };
-    layer.style.align = "left";
-  }
-
-  state.selectedLayerId = layer.id;
+  state.selectedLayerId = state.layers[0].id;
+  applyCanvasFormat();
+  render();
   refreshLayersUI();
   refreshPropsUI();
-  render();
-  setStatus("Hook applied");
+  setStatus("New project created");
 }
 
-$("btnGenerateHooks").addEventListener("click", () => {
-  const title = $("smartTitle").value || "";
-  if (!title.trim()){
-    setStatus("Enter a title to generate hooks");
-    return;
-  }
-  const hooks = generateHooksFromTitle(title);
-  renderHooksList(hooks);
-  setStatus("Generated 10 hook ideas");
-});
+$("btnNew").addEventListener("click", resetProject);
 
-$("btnClearHooks").addEventListener("click", () => {
-  $("hooksList").innerHTML = "";
-  setStatus("Cleared hooks");
-});
-
-// ---------- Init ----------
+// -------------------- Init --------------------
 function init(){
   state.dpiScale = 1;
   $("formatSelect").value = state.formatKey;
-  $("bgFitSelect").value = state.bgFit;
+  $("bgModeSelect").value = state.bgMode;
   $("bgDim").value = state.bgDim;
   $("bgDimVal").textContent = state.bgDim.toFixed(2);
   $("jpgQualityVal").textContent = Number($("jpgQuality").value).toFixed(2);
 
   bindTextProps();
   bindImageProps();
+
   applyCanvasFormat();
   resetProject();
 }
