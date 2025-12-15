@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Thumbnail & Pinterest Post Maker (Layers)</title>
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Optional: Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Inter:wght@400;600;800&family=Montserrat:wght@500;700;900&family=Oswald:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🖼️</div>
+      <div>
+        <div class="title">Thumbnail + Pinterest Post Maker</div>
+        <div class="subtitle">Text + Image Layers • Drag/Resize • Presets • Export</div>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <button id="btnNew" class="btn">New</button>
+      <button id="btnDuplicateLayer" class="btn">Duplicate Layer</button>
+      <button id="btnDeleteLayer" class="btn danger">Delete Layer</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT: Project + Layers -->
+    <aside class="panel">
+      <section class="card">
+        <h2>Project</h2>
+
+        <div class="row">
+          <label>Format</label>
+          <select id="formatSelect">
+            <option value="youtube_16_9">YouTube Thumbnail (1280×720)</option>
+            <option value="pinterest_2_3">Pinterest Post (1000×1500)</option>
+            <option value="story_9_16">Story/Reels (1080×1920)</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label>Background Fit</label>
+          <select id="bgFitSelect">
+            <option value="cover">Cover (crop)</option>
+            <option value="contain">Contain (letterbox)</option>
+            <option value="contain_blur">Contain + Blur Fill</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label>Dim Background</label>
+          <div class="inline">
+            <input id="bgDim" type="range" min="0" max="0.85" step="0.01" value="0.15">
+            <span id="bgDimVal" class="mono">0.15</span>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>Upload Background Image</label>
+          <input id="imageInput" type="file" accept="image/*" />
+          <div class="hint">Tip: you can also paste an image (Ctrl+V).</div>
+        </div>
+
+        <div class="row">
+          <label>Smart Modern Hook Presets</label>
+          <input id="smartTitle" type="text" placeholder="Paste your video title here…" />
+          <div class="grid2" style="margin-top:10px;">
+            <button class="btn primary" id="btnGenerateHooks">Generate 10 Hooks</button>
+            <button class="btn" id="btnClearHooks">Clear</button>
+          </div>
+          <div class="hint">Click a hook to apply it to the selected Text layer (or it will create a new Hook layer).</div>
+          <div id="hooksList" class="hooks"></div>
+        </div>
+
+        <div class="row">
+          <label>Quick Templates</label>
+          <div class="grid2">
+            <button class="btn" id="tplYouTubeHook">YT: Hook + Badge</button>
+            <button class="btn" id="tplYouTubeCenter">YT: Big Center Hook</button>
+            <button class="btn" id="tplPinterestTitle">Pin: Title + Bullets</button>
+            <button class="btn" id="tplStoryPunchy">Story: Punchy Title</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Layers</h2>
+          <div class="card-actions">
+            <button id="btnAddTextLayer" class="btn primary">+ Text</button>
+            <button id="btnAddImageLayer" class="btn">+ Image/Logo</button>
+            <button id="btnBringForward" class="btn">Up</button>
+            <button id="btnSendBackward" class="btn">Down</button>
+          </div>
+        </div>
+
+        <div id="layersList" class="layers"></div>
+      </section>
+    </aside>
+
+    <!-- CENTER: Canvas -->
+    <section class="stage">
+      <div class="stage-inner">
+        <canvas id="canvas"></canvas>
+        <div class="stage-help">
+          <span class="kbd">Drag</span> to move • <span class="kbd">Shift+Drag</span> to constrain • <span class="kbd">Handles</span> to resize
+        </div>
+      </div>
+
+      <div class="export-bar">
+        <div class="export-left">
+          <label class="small">Export</label>
+          <select id="exportType">
+            <option value="png">PNG (best quality)</option>
+            <option value="jpg">JPG (smaller size)</option>
+          </select>
+
+          <div class="inline export-quality">
+            <label class="small">JPG Quality</label>
+            <input id="jpgQuality" type="range" min="0.4" max="1" step="0.01" value="0.92">
+            <span id="jpgQualityVal" class="mono">0.92</span>
+          </div>
+
+          <button id="btnExport" class="btn primary">Download</button>
+        </div>
+
+        <div class="export-right">
+          <div class="pill" id="statusPill">Ready</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: Selected Layer Props -->
+    <aside class="panel">
+      <section class="card" id="layerPropsCard">
+        <h2>Selected Layer</h2>
+        <div id="noSelection" class="hint">Select a layer to edit its properties.</div>
+
+        <!-- TEXT PROPS -->
+        <div id="layerPropsText" class="props hidden">
+          <div class="row">
+            <label>Layer Name</label>
+            <input id="propName" type="text" />
+          </div>
+
+          <div class="row">
+            <label>Text</label>
+            <textarea id="propText" rows="4" placeholder="Type your hook / title / bullets..."></textarea>
+            <div class="hint">Use new lines for manual line breaks. Auto-wrap fits within the box.</div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Font</label>
+              <select id="propFont">
+                <option value="Inter">Inter</option>
+                <option value="Montserrat">Montserrat</option>
+                <option value="Oswald">Oswald</option>
+                <option value="Bebas Neue">Bebas Neue</option>
+                <option value="Anton">Anton</option>
+                <option value="Arial">Arial</option>
+                <option value="Impact">Impact</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Weight</label>
+              <select id="propWeight">
+                <option value="400">400</option>
+                <option value="500">500</option>
+                <option value="600">600</option>
+                <option value="700">700</option>
+                <option value="800" selected>800</option>
+                <option value="900">900</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Auto-fit</label>
+              <select id="propAutoFit">
+                <option value="yes" selected>Yes (fit box)</option>
+                <option value="no">No (use size)</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Font Size</label>
+              <input id="propFontSize" type="number" min="8" max="260" value="96" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Text Color</label>
+              <input id="propFill" type="color" value="#ffffff" />
+            </div>
+
+            <div class="row">
+              <label>Alignment</label>
+              <select id="propAlign">
+                <option value="left">Left</option>
+                <option value="center" selected>Center</option>
+                <option value="right">Right</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Uppercase</label>
+              <select id="propUppercase">
+                <option value="yes" selected>Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Line Height</label>
+              <input id="propLineHeight" type="number" min="0.8" max="1.8" step="0.05" value="1.05" />
+            </div>
+          </div>
+
+          <hr class="sep" />
+
+          <h3>Outline (Stroke)</h3>
+          <div class="grid2">
+            <div class="row">
+              <label>Stroke On</label>
+              <select id="propStrokeOn">
+                <option value="yes" selected>Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Stroke Width</label>
+              <input id="propStrokeWidth" type="number" min="0" max="60" value="14" />
+            </div>
+          </div>
+          <div class="row">
+            <label>Stroke Color</label>
+            <input id="propStrokeColor" type="color" value="#000000" />
+          </div>
+
+          <hr class="sep" />
+
+          <h3>Shadow</h3>
+          <div class="grid2">
+            <div class="row">
+              <label>Shadow On</label>
+              <select id="propShadowOn">
+                <option value="yes" selected>Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Blur</label>
+              <input id="propShadowBlur" type="number" min="0" max="80" value="18" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Offset X</label>
+              <input id="propShadowDx" type="number" min="-80" max="80" value="6" />
+            </div>
+            <div class="row">
+              <label>Offset Y</label>
+              <input id="propShadowDy" type="number" min="-80" max="80" value="6" />
+            </div>
+          </div>
+
+          <div class="row">
+            <label>Shadow Color</label>
+            <input id="propShadowColor" type="color" value="#000000" />
+          </div>
+
+          <hr class="sep" />
+
+          <h3>Background Box</h3>
+          <div class="grid2">
+            <div class="row">
+              <label>Box On</label>
+              <select id="propBoxOn">
+                <option value="no" selected>No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Padding</label>
+              <input id="propBoxPad" type="number" min="0" max="80" value="18" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Radius</label>
+              <input id="propBoxRadius" type="number" min="0" max="120" value="24" />
+            </div>
+            <div class="row">
+              <label>Box Color</label>
+              <input id="propBoxColor" type="color" value="#000000" />
+            </div>
+          </div>
+
+          <div class="row">
+            <label>Box Opacity</label>
+            <div class="inline">
+              <input id="propBoxOpacity" type="range" min="0" max="1" step="0.01" value="0.35" />
+              <span id="propBoxOpacityVal" class="mono">0.35</span>
+            </div>
+          </div>
+
+          <hr class="sep" />
+
+          <div class="row">
+            <label>Quick Actions</label>
+            <div class="grid2">
+              <button id="btnSnapSafe" class="btn">Snap to Safe Area</button>
+              <button id="btnAutoContrast" class="btn">Auto Contrast</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- IMAGE PROPS -->
+        <div id="layerPropsImage" class="props hidden">
+          <div class="row">
+            <label>Layer Name</label>
+            <input id="imgPropName" type="text" />
+          </div>
+
+          <div class="row">
+            <label>Upload Logo/Image (PNG recommended)</label>
+            <input id="imgPropFile" type="file" accept="image/*" />
+            <div class="hint">Tip: transparent PNG logos look best.</div>
+          </div>
+
+          <div class="grid2">
+            <div class="row">
+              <label>Opacity</label>
+              <div class="inline">
+                <input id="imgPropOpacity" type="range" min="0" max="1" step="0.01" value="1" />
+                <span id="imgPropOpacityVal" class="mono">1.00</span>
+              </div>
+            </div>
+
+            <div class="row">
+              <label>Fit Mode</label>
+              <select id="imgPropFit">
+                <option value="contain" selected>Contain</option>
+                <option value="cover">Cover</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <label>Soft Shadow</label>
+            <select id="imgPropShadow">
+              <option value="no" selected>No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </div>
+
+          <div class="hint">Drag to position anywhere • Use handles to resize.</div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
